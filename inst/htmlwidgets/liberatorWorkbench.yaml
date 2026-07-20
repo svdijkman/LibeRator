@@ -1,0 +1,7 @@
+dependencies:
+  - name: liberator-workbench-style
+    version: 0.1.0
+    src: htmlwidgets
+    stylesheet:
+      - liberatorWorkbench.css
+      - liberatorExtras.css

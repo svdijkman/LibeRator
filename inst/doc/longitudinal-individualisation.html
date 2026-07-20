@@ -1,0 +1,476 @@
+<!DOCTYPE html>
+
+<html>
+
+<head>
+
+<meta charset="utf-8" />
+<meta name="generator" content="pandoc" />
+<meta http-equiv="X-UA-Compatible" content="IE=EDGE" />
+
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+
+
+
+<title>Longitudinal individualisation with LibeRator</title>
+
+<script>// Pandoc 2.9 adds attributes on both header and div. We remove the former (to
+// be compatible with the behavior of Pandoc < 2.8).
+document.addEventListener('DOMContentLoaded', function(e) {
+  var hs = document.querySelectorAll("div.section[class*='level'] > :first-child");
+  var i, h, a;
+  for (i = 0; i < hs.length; i++) {
+    h = hs[i];
+    if (!/^h[1-6]$/i.test(h.tagName)) continue;  // it should be a header h1-h6
+    a = h.attributes;
+    while (a.length > 0) h.removeAttribute(a[0].name);
+  }
+});
+</script>
+
+<style type="text/css">
+code{white-space: pre-wrap;}
+span.smallcaps{font-variant: small-caps;}
+span.underline{text-decoration: underline;}
+div.column{display: inline-block; vertical-align: top; width: 50%;}
+div.hanging-indent{margin-left: 1.5em; text-indent: -1.5em;}
+ul.task-list{list-style: none;}
+</style>
+
+
+
+<style type="text/css">
+code {
+white-space: pre;
+}
+.sourceCode {
+overflow: visible;
+}
+</style>
+<style type="text/css" data-origin="pandoc">
+html { -webkit-text-size-adjust: 100%; }
+pre > code.sourceCode { white-space: pre; position: relative; }
+pre > code.sourceCode > span { display: inline-block; line-height: 1.25; }
+pre > code.sourceCode > span:empty { height: 1.2em; }
+.sourceCode { overflow: visible; }
+code.sourceCode > span { color: inherit; text-decoration: inherit; }
+div.sourceCode { margin: 1em 0; }
+pre.sourceCode { margin: 0; }
+@media screen {
+div.sourceCode { overflow: auto; }
+}
+@media print {
+pre > code.sourceCode { white-space: pre-wrap; }
+pre > code.sourceCode > span { text-indent: -5em; padding-left: 5em; }
+}
+pre.numberSource code
+{ counter-reset: source-line 0; }
+pre.numberSource code > span
+{ position: relative; left: -4em; counter-increment: source-line; }
+pre.numberSource code > span > a:first-child::before
+{ content: counter(source-line);
+position: relative; left: -1em; text-align: right; vertical-align: baseline;
+border: none; display: inline-block;
+-webkit-touch-callout: none; -webkit-user-select: none;
+-khtml-user-select: none; -moz-user-select: none;
+-ms-user-select: none; user-select: none;
+padding: 0 4px; width: 4em;
+color: #aaaaaa;
+}
+pre.numberSource { margin-left: 3em; border-left: 1px solid #aaaaaa; padding-left: 4px; }
+div.sourceCode
+{ }
+@media screen {
+pre > code.sourceCode > span > a:first-child::before { text-decoration: underline; }
+}
+code span.al { color: #ff0000; font-weight: bold; } 
+code span.an { color: #60a0b0; font-weight: bold; font-style: italic; } 
+code span.at { color: #7d9029; } 
+code span.bn { color: #40a070; } 
+code span.bu { color: #008000; } 
+code span.cf { color: #007020; font-weight: bold; } 
+code span.ch { color: #4070a0; } 
+code span.cn { color: #880000; } 
+code span.co { color: #60a0b0; font-style: italic; } 
+code span.cv { color: #60a0b0; font-weight: bold; font-style: italic; } 
+code span.do { color: #ba2121; font-style: italic; } 
+code span.dt { color: #902000; } 
+code span.dv { color: #40a070; } 
+code span.er { color: #ff0000; font-weight: bold; } 
+code span.ex { } 
+code span.fl { color: #40a070; } 
+code span.fu { color: #06287e; } 
+code span.im { color: #008000; font-weight: bold; } 
+code span.in { color: #60a0b0; font-weight: bold; font-style: italic; } 
+code span.kw { color: #007020; font-weight: bold; } 
+code span.op { color: #666666; } 
+code span.ot { color: #007020; } 
+code span.pp { color: #bc7a00; } 
+code span.sc { color: #4070a0; } 
+code span.ss { color: #bb6688; } 
+code span.st { color: #4070a0; } 
+code span.va { color: #19177c; } 
+code span.vs { color: #4070a0; } 
+code span.wa { color: #60a0b0; font-weight: bold; font-style: italic; } 
+</style>
+<script>
+// apply pandoc div.sourceCode style to pre.sourceCode instead
+(function() {
+  var sheets = document.styleSheets;
+  for (var i = 0; i < sheets.length; i++) {
+    if (sheets[i].ownerNode.dataset["origin"] !== "pandoc") continue;
+    try { var rules = sheets[i].cssRules; } catch (e) { continue; }
+    var j = 0;
+    while (j < rules.length) {
+      var rule = rules[j];
+      // check if there is a div.sourceCode rule
+      if (rule.type !== rule.STYLE_RULE || rule.selectorText !== "div.sourceCode") {
+        j++;
+        continue;
+      }
+      var style = rule.style.cssText;
+      // check if color or background-color is set
+      if (rule.style.color === '' && rule.style.backgroundColor === '') {
+        j++;
+        continue;
+      }
+      // replace div.sourceCode by a pre.sourceCode rule
+      sheets[i].deleteRule(j);
+      sheets[i].insertRule('pre.sourceCode{' + style + '}', j);
+    }
+  }
+})();
+</script>
+
+
+
+
+<style type="text/css">body {
+background-color: #fff;
+margin: 1em auto;
+max-width: 700px;
+overflow: visible;
+padding-left: 2em;
+padding-right: 2em;
+font-family: "Open Sans", "Helvetica Neue", Helvetica, Arial, sans-serif;
+font-size: 14px;
+line-height: 1.35;
+}
+#TOC {
+clear: both;
+margin: 0 0 10px 10px;
+padding: 4px;
+width: 400px;
+border: 1px solid #CCCCCC;
+border-radius: 5px;
+background-color: #f6f6f6;
+font-size: 13px;
+line-height: 1.3;
+}
+#TOC .toctitle {
+font-weight: bold;
+font-size: 15px;
+margin-left: 5px;
+}
+#TOC ul {
+padding-left: 40px;
+margin-left: -1.5em;
+margin-top: 5px;
+margin-bottom: 5px;
+}
+#TOC ul ul {
+margin-left: -2em;
+}
+#TOC li {
+line-height: 16px;
+}
+table {
+margin: 1em auto;
+border-width: 1px;
+border-color: #DDDDDD;
+border-style: outset;
+border-collapse: collapse;
+}
+table th {
+border-width: 2px;
+padding: 5px;
+border-style: inset;
+}
+table td {
+border-width: 1px;
+border-style: inset;
+line-height: 18px;
+padding: 5px 5px;
+}
+table, table th, table td {
+border-left-style: none;
+border-right-style: none;
+}
+table thead, table tr.even {
+background-color: #f7f7f7;
+}
+p {
+margin: 0.5em 0;
+}
+blockquote {
+background-color: #f6f6f6;
+padding: 0.25em 0.75em;
+}
+hr {
+border-style: solid;
+border: none;
+border-top: 1px solid #777;
+margin: 28px 0;
+}
+dl {
+margin-left: 0;
+}
+dl dd {
+margin-bottom: 13px;
+margin-left: 13px;
+}
+dl dt {
+font-weight: bold;
+}
+ul {
+margin-top: 0;
+}
+ul li {
+list-style: circle outside;
+}
+ul ul {
+margin-bottom: 0;
+}
+pre, code {
+background-color: #f7f7f7;
+border-radius: 3px;
+color: #333;
+white-space: pre-wrap; 
+}
+pre {
+border-radius: 3px;
+margin: 5px 0px 10px 0px;
+padding: 10px;
+}
+pre:not([class]) {
+background-color: #f7f7f7;
+}
+code {
+font-family: Consolas, Monaco, 'Courier New', monospace;
+font-size: 85%;
+}
+p > code, li > code {
+padding: 2px 0px;
+}
+div.figure {
+text-align: center;
+}
+img {
+background-color: #FFFFFF;
+padding: 2px;
+border: 1px solid #DDDDDD;
+border-radius: 3px;
+border: 1px solid #CCCCCC;
+margin: 0 5px;
+}
+h1 {
+margin-top: 0;
+font-size: 35px;
+line-height: 40px;
+}
+h2 {
+border-bottom: 4px solid #f7f7f7;
+padding-top: 10px;
+padding-bottom: 2px;
+font-size: 145%;
+}
+h3 {
+border-bottom: 2px solid #f7f7f7;
+padding-top: 10px;
+font-size: 120%;
+}
+h4 {
+border-bottom: 1px solid #f7f7f7;
+margin-left: 8px;
+font-size: 105%;
+}
+h5, h6 {
+border-bottom: 1px solid #ccc;
+font-size: 105%;
+}
+a {
+color: #0033dd;
+text-decoration: none;
+}
+a:hover {
+color: #6666ff; }
+a:visited {
+color: #800080; }
+a:visited:hover {
+color: #BB00BB; }
+a[href^="http:"] {
+text-decoration: underline; }
+a[href^="https:"] {
+text-decoration: underline; }
+
+code > span.kw { color: #555; font-weight: bold; } 
+code > span.dt { color: #902000; } 
+code > span.dv { color: #40a070; } 
+code > span.bn { color: #d14; } 
+code > span.fl { color: #d14; } 
+code > span.ch { color: #d14; } 
+code > span.st { color: #d14; } 
+code > span.co { color: #888888; font-style: italic; } 
+code > span.ot { color: #007020; } 
+code > span.al { color: #ff0000; font-weight: bold; } 
+code > span.fu { color: #900; font-weight: bold; } 
+code > span.er { color: #a61717; background-color: #e3d2d2; } 
+</style>
+
+
+
+
+</head>
+
+<body>
+
+
+
+
+<h1 class="title toc-ignore">Longitudinal individualisation with
+LibeRator</h1>
+
+
+
+<p>LibeRator separates four things that are often mixed together in a
+dosing script:</p>
+<ol style="list-style-type: decimal">
+<li>immutable patient evidence;</li>
+<li>a qualified population PK/PD model;</li>
+<li>a versioned therapeutic endpoint;</li>
+<li>an assessment or regimen comparison tied to exact hashes of the
+first three.</li>
+</ol>
+<p>This separation makes it possible to revisit what was known at each
+point in a patient’s timeline and to distinguish a changing posterior
+estimate from an explicitly time-varying latent parameter.</p>
+<div id="patient-evidence-and-missing-covariates" class="section level2">
+<h2>Patient evidence and missing covariates</h2>
+<div class="sourceCode" id="cb1"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb1-1"><a href="#cb1-1" tabindex="-1"></a><span class="fu">library</span>(LibeRator)</span>
+<span id="cb1-2"><a href="#cb1-2" tabindex="-1"></a>example <span class="ot">&lt;-</span> <span class="fu">lator_example_aed</span>()</span>
+<span id="cb1-3"><a href="#cb1-3" tabindex="-1"></a>example<span class="sc">$</span>patient</span>
+<span id="cb1-4"><a href="#cb1-4" tabindex="-1"></a><span class="co">#&gt; LibeRator longitudinal patient</span></span>
+<span id="cb1-5"><a href="#cb1-5" tabindex="-1"></a><span class="co">#&gt;   pseudonym: TEACH-AED-001  revision: 0 </span></span>
+<span id="cb1-6"><a href="#cb1-6" tabindex="-1"></a><span class="co">#&gt;   events: 9  assessments: 0</span></span>
+<span id="cb1-7"><a href="#cb1-7" tabindex="-1"></a></span>
+<span id="cb1-8"><a href="#cb1-8" tabindex="-1"></a><span class="fu">lator_covariate_at</span>(</span>
+<span id="cb1-9"><a href="#cb1-9" tabindex="-1"></a>  example<span class="sc">$</span>patient, <span class="st">&quot;WT&quot;</span>, <span class="at">times =</span> <span class="fu">c</span>(<span class="dv">0</span>, <span class="dv">168</span>, <span class="dv">180</span>),</span>
+<span id="cb1-10"><a href="#cb1-10" tabindex="-1"></a>  <span class="at">method =</span> <span class="st">&quot;locf&quot;</span>, <span class="at">max_age =</span> <span class="dv">365</span> <span class="sc">*</span> <span class="dv">24</span></span>
+<span id="cb1-11"><a href="#cb1-11" tabindex="-1"></a>)</span>
+<span id="cb1-12"><a href="#cb1-12" tabindex="-1"></a><span class="co">#&gt;   name time value unit source_time age   method                 status</span></span>
+<span id="cb1-13"><a href="#cb1-13" tabindex="-1"></a><span class="co">#&gt; 1   WT    0    68   kg           0   0 observed               observed</span></span>
+<span id="cb1-14"><a href="#cb1-14" tabindex="-1"></a><span class="co">#&gt; 2   WT  168    68   kg           0 168     locf resolved_after_missing</span></span>
+<span id="cb1-15"><a href="#cb1-15" tabindex="-1"></a><span class="co">#&gt; 3   WT  180    68   kg           0 180     locf               resolved</span></span>
+<span id="cb1-16"><a href="#cb1-16" tabindex="-1"></a><span class="co">#&gt;   uncertainty_sd                           source_event_id scheduled_missing</span></span>
+<span id="cb1-17"><a href="#cb1-17" tabindex="-1"></a><span class="co">#&gt; 1             NA event_20260718081641.256_09951505ff696643             FALSE</span></span>
+<span id="cb1-18"><a href="#cb1-18" tabindex="-1"></a><span class="co">#&gt; 2             NA event_20260718081641.256_09951505ff696643              TRUE</span></span>
+<span id="cb1-19"><a href="#cb1-19" tabindex="-1"></a><span class="co">#&gt; 3             NA event_20260718081641.256_09951505ff696643             FALSE</span></span>
+<span id="cb1-20"><a href="#cb1-20" tabindex="-1"></a><span class="co">#&gt;             missing_reason</span></span>
+<span id="cb1-21"><a href="#cb1-21" tabindex="-1"></a><span class="co">#&gt; 1                         </span></span>
+<span id="cb1-22"><a href="#cb1-22" tabindex="-1"></a><span class="co">#&gt; 2 not weighed at follow-up</span></span>
+<span id="cb1-23"><a href="#cb1-23" tabindex="-1"></a><span class="co">#&gt; 3</span></span></code></pre></div>
+<p>The weight scheduled at hour 168 is explicitly missing. LOCF can
+still be an appropriate modelling policy, but the resolved value carries
+the <code>resolved_after_missing</code> status, source event, age, and
+missing reason. A population fallback is used only when the caller
+supplies it explicitly.</p>
+</div>
+<div id="static-and-dynamic-patient-states" class="section level2">
+<h2>Static and dynamic patient states</h2>
+<div class="sourceCode" id="cb2"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb2-1"><a href="#cb2-1" tabindex="-1"></a>static <span class="ot">&lt;-</span> <span class="fu">lator_assess</span>(</span>
+<span id="cb2-2"><a href="#cb2-2" tabindex="-1"></a>  example<span class="sc">$</span>patient, example<span class="sc">$</span>model, example<span class="sc">$</span>endpoint,</span>
+<span id="cb2-3"><a href="#cb2-3" tabindex="-1"></a>  <span class="at">covariate_policies =</span> <span class="fu">list</span>(<span class="at">WT =</span> <span class="fu">list</span>(<span class="at">method =</span> <span class="st">&quot;locf&quot;</span>, <span class="at">max_age =</span> <span class="dv">365</span> <span class="sc">*</span> <span class="dv">24</span>))</span>
+<span id="cb2-4"><a href="#cb2-4" tabindex="-1"></a>)</span>
+<span id="cb2-5"><a href="#cb2-5" tabindex="-1"></a></span>
+<span id="cb2-6"><a href="#cb2-6" tabindex="-1"></a>dynamic <span class="ot">&lt;-</span> <span class="fu">lator_assess</span>(</span>
+<span id="cb2-7"><a href="#cb2-7" tabindex="-1"></a>  example<span class="sc">$</span>patient, example<span class="sc">$</span>model, example<span class="sc">$</span>endpoint,</span>
+<span id="cb2-8"><a href="#cb2-8" tabindex="-1"></a>  <span class="at">mode =</span> <span class="st">&quot;dynamic&quot;</span>, <span class="at">process_scale =</span> <span class="fl">0.1</span>,</span>
+<span id="cb2-9"><a href="#cb2-9" tabindex="-1"></a>  <span class="at">covariate_policies =</span> <span class="fu">list</span>(<span class="at">WT =</span> <span class="fu">list</span>(<span class="at">method =</span> <span class="st">&quot;locf&quot;</span>, <span class="at">max_age =</span> <span class="dv">365</span> <span class="sc">*</span> <span class="dv">24</span>))</span>
+<span id="cb2-10"><a href="#cb2-10" tabindex="-1"></a>)</span>
+<span id="cb2-11"><a href="#cb2-11" tabindex="-1"></a></span>
+<span id="cb2-12"><a href="#cb2-12" tabindex="-1"></a>dynamic<span class="sc">$</span>eta_trajectory</span>
+<span id="cb2-13"><a href="#cb2-13" tabindex="-1"></a><span class="co">#&gt;           occasion start_time parameter     estimate standard_error</span></span>
+<span id="cb2-14"><a href="#cb2-14" tabindex="-1"></a><span class="co">#&gt; ETA1_OCC1        1       -Inf      ETA1 -0.008080248      0.2551004</span></span>
+<span id="cb2-15"><a href="#cb2-15" tabindex="-1"></a><span class="co">#&gt; ETA2_OCC1        1       -Inf      ETA2 -0.109970937      0.1773561</span></span>
+<span id="cb2-16"><a href="#cb2-16" tabindex="-1"></a><span class="co">#&gt; ETA1_OCC2        2        168      ETA1  0.008816252      0.2682614</span></span>
+<span id="cb2-17"><a href="#cb2-17" tabindex="-1"></a><span class="co">#&gt; ETA2_OCC2        2        168      ETA2 -0.089878592      0.1835294</span></span></code></pre></div>
+<p>Static mode estimates one ETA vector from all visible observations.
+Dynamic mode turns each ETA into an occasion-specific state. The joint
+prior is a Gaussian random walk: adjacent states are correlated, their
+difference has an explicit process covariance, and PK compartment
+amounts remain continuous at boundaries. Add <code>state_boundary</code>
+events only where the scientific design supports a possible change;
+adding a state at every sample is usually weakly identified.</p>
+</div>
+<div id="endpoint-based-regimen-comparison" class="section level2">
+<h2>Endpoint-based regimen comparison</h2>
+<div class="sourceCode" id="cb3"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb3-1"><a href="#cb3-1" tabindex="-1"></a>candidates <span class="ot">&lt;-</span> <span class="fu">lator_regimen_candidates</span>(</span>
+<span id="cb3-2"><a href="#cb3-2" tabindex="-1"></a>  <span class="at">amounts =</span> <span class="fu">c</span>(<span class="dv">100</span>, <span class="dv">200</span>, <span class="dv">300</span>), <span class="at">intervals =</span> <span class="fu">c</span>(<span class="dv">12</span>, <span class="dv">24</span>), <span class="at">horizon =</span> <span class="dv">168</span></span>
+<span id="cb3-3"><a href="#cb3-3" tabindex="-1"></a>)</span>
+<span id="cb3-4"><a href="#cb3-4" tabindex="-1"></a>comparison <span class="ot">&lt;-</span> <span class="fu">lator_regimen_optimise</span>(</span>
+<span id="cb3-5"><a href="#cb3-5" tabindex="-1"></a>  dynamic, example<span class="sc">$</span>patient, candidates,</span>
+<span id="cb3-6"><a href="#cb3-6" tabindex="-1"></a>  <span class="at">endpoint =</span> example<span class="sc">$</span>endpoint, <span class="at">nsim =</span> <span class="dv">500</span>, <span class="at">seed =</span> <span class="dv">42</span></span>
+<span id="cb3-7"><a href="#cb3-7" tabindex="-1"></a>)</span>
+<span id="cb3-8"><a href="#cb3-8" tabindex="-1"></a>comparison<span class="sc">$</span>summary</span>
+<span id="cb3-9"><a href="#cb3-9" tabindex="-1"></a></span>
+<span id="cb3-10"><a href="#cb3-10" tabindex="-1"></a><span class="co"># Promote a deliberately selected candidate to a separate forecast artifact.</span></span>
+<span id="cb3-11"><a href="#cb3-11" tabindex="-1"></a>selected <span class="ot">&lt;-</span> comparison<span class="sc">$</span>summary<span class="sc">$</span>candidate_id[[<span class="dv">1</span><span class="dt">L</span>]]</span>
+<span id="cb3-12"><a href="#cb3-12" tabindex="-1"></a>forecast <span class="ot">&lt;-</span> <span class="fu">lator_regimen_predict</span>(comparison, selected)</span>
+<span id="cb3-13"><a href="#cb3-13" tabindex="-1"></a>forecast<span class="sc">$</span>forecast</span></code></pre></div>
+<p>Each posterior draw replays the complete dosing history before the
+future candidate regimen. For the AED endpoint, the default score is
+distance from the midpoint of the supplied therapeutic range. Other
+endpoint objects can evaluate pre-transplant windows, AUC/trough ranges,
+or fraction of time above a longitudinal MIC.</p>
+<p>The optimisation step already generates candidate trajectories
+efficiently. <code>lator_regimen_predict()</code> does not silently
+re-fit or re-simulate them; it creates a linked forecast artifact from
+the selected candidate and retains its uncertainty, regimen, assessment
+identifier, and endpoint evaluation. This keeps the transition from
+ranked options to a future prediction explicit and reviewable.</p>
+</div>
+<div id="graphical-workbench" class="section level2">
+<h2>Graphical workbench</h2>
+<div class="sourceCode" id="cb4"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb4-1"><a href="#cb4-1" tabindex="-1"></a>workspace <span class="ot">&lt;-</span> <span class="fu">lator_workspace</span>(</span>
+<span id="cb4-2"><a href="#cb4-2" tabindex="-1"></a>  <span class="st">&quot;~/LibeR/liberator-workspace&quot;</span>,</span>
+<span id="cb4-3"><a href="#cb4-3" tabindex="-1"></a>  <span class="at">passphrase =</span> <span class="st">&quot;use a long, unique research passphrase&quot;</span></span>
+<span id="cb4-4"><a href="#cb4-4" tabindex="-1"></a>)</span>
+<span id="cb4-5"><a href="#cb4-5" tabindex="-1"></a><span class="fu">lator_patient_save</span>(workspace, example<span class="sc">$</span>patient)</span>
+<span id="cb4-6"><a href="#cb4-6" tabindex="-1"></a><span class="fu">lator_gui</span>(</span>
+<span id="cb4-7"><a href="#cb4-7" tabindex="-1"></a>  <span class="at">workspace =</span> workspace,</span>
+<span id="cb4-8"><a href="#cb4-8" tabindex="-1"></a>  <span class="at">models =</span> <span class="fu">list</span>(<span class="at">aed =</span> example<span class="sc">$</span>model),</span>
+<span id="cb4-9"><a href="#cb4-9" tabindex="-1"></a>  <span class="at">endpoints =</span> <span class="fu">list</span>(<span class="at">aed =</span> example<span class="sc">$</span>endpoint)</span>
+<span id="cb4-10"><a href="#cb4-10" tabindex="-1"></a>)</span></code></pre></div>
+<p>The workbench is a research interface. A clinical deployment needs
+the additional model governance, identity, authorization, safety,
+independent validation, and operational controls described in
+<code>SECURITY.md</code>.</p>
+</div>
+
+
+
+<!-- code folding -->
+
+
+<!-- dynamically load mathjax for compatibility with self-contained -->
+<script>
+  (function () {
+    var script = document.createElement("script");
+    script.type = "text/javascript";
+    script.src  = "https://mathjax.rstudio.com/latest/MathJax.js?config=TeX-AMS-MML_HTMLorMML";
+    document.getElementsByTagName("head")[0].appendChild(script);
+  })();
+</script>
+
+</body>
+</html>

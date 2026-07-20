@@ -1,0 +1,6 @@
+^\.gitignore$
+^\.gui-check$
+^\.gui-check-workspace$
+^\.queue-check$
+^.*\.Rproj$
+^\.Rproj\.user$

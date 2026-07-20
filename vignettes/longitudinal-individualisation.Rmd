@@ -1,0 +1,94 @@
+---
+title: "Longitudinal individualisation with LibeRator"
+output: rmarkdown::html_vignette
+vignette: >
+  %\VignetteIndexEntry{Longitudinal individualisation with LibeRator}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(collapse = TRUE, comment = "#>")
+```
+
+LibeRator separates four things that are often mixed together in a dosing script:
+
+1. immutable patient evidence;
+2. a qualified population PK/PD model;
+3. a versioned therapeutic endpoint;
+4. an assessment or regimen comparison tied to exact hashes of the first three.
+
+This separation makes it possible to revisit what was known at each point in a patient's timeline and to distinguish a changing posterior estimate from an explicitly time-varying latent parameter.
+
+## Patient evidence and missing covariates
+
+```{r example}
+library(LibeRator)
+example <- lator_example_aed()
+example$patient
+
+lator_covariate_at(
+  example$patient, "WT", times = c(0, 168, 180),
+  method = "locf", max_age = 365 * 24
+)
+```
+
+The weight scheduled at hour 168 is explicitly missing. LOCF can still be an appropriate modelling policy, but the resolved value carries the `resolved_after_missing` status, source event, age, and missing reason. A population fallback is used only when the caller supplies it explicitly.
+
+## Static and dynamic patient states
+
+```{r assessment}
+static <- lator_assess(
+  example$patient, example$model, example$endpoint,
+  covariate_policies = list(WT = list(method = "locf", max_age = 365 * 24))
+)
+
+dynamic <- lator_assess(
+  example$patient, example$model, example$endpoint,
+  mode = "dynamic", process_scale = 0.1,
+  covariate_policies = list(WT = list(method = "locf", max_age = 365 * 24))
+)
+
+dynamic$eta_trajectory
+```
+
+Static mode estimates one ETA vector from all visible observations. Dynamic mode turns each ETA into an occasion-specific state. The joint prior is a Gaussian random walk: adjacent states are correlated, their difference has an explicit process covariance, and PK compartment amounts remain continuous at boundaries. Add `state_boundary` events only where the scientific design supports a possible change; adding a state at every sample is usually weakly identified.
+
+## Endpoint-based regimen comparison
+
+```{r regimen, eval=FALSE}
+candidates <- lator_regimen_candidates(
+  amounts = c(100, 200, 300), intervals = c(12, 24), horizon = 168
+)
+comparison <- lator_regimen_optimise(
+  dynamic, example$patient, candidates,
+  endpoint = example$endpoint, nsim = 500, seed = 42
+)
+comparison$summary
+
+# Promote a deliberately selected candidate to a separate forecast artifact.
+selected <- comparison$summary$candidate_id[[1L]]
+forecast <- lator_regimen_predict(comparison, selected)
+forecast$forecast
+```
+
+Each posterior draw replays the complete dosing history before the future candidate regimen. For the AED endpoint, the default score is distance from the midpoint of the supplied therapeutic range. Other endpoint objects can evaluate pre-transplant windows, AUC/trough ranges, or fraction of time above a longitudinal MIC.
+
+The optimisation step already generates candidate trajectories efficiently. `lator_regimen_predict()` does not silently re-fit or re-simulate them; it creates a linked forecast artifact from the selected candidate and retains its uncertainty, regimen, assessment identifier, and endpoint evaluation. This keeps the transition from ranked options to a future prediction explicit and reviewable.
+
+## Graphical workbench
+
+```{r gui, eval=FALSE}
+workspace <- lator_workspace(
+  "~/LibeR/liberator-workspace",
+  passphrase = "use a long, unique research passphrase"
+)
+lator_patient_save(workspace, example$patient)
+lator_gui(
+  workspace = workspace,
+  models = list(aed = example$model),
+  endpoints = list(aed = example$endpoint)
+)
+```
+
+The workbench is a research interface. A clinical deployment needs the additional model governance, identity, authorization, safety, independent validation, and operational controls described in `SECURITY.md`.
