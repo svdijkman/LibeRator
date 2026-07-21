@@ -62,6 +62,12 @@ forecast$forecast
 
 The current package is suitable for methodological research, teaching, simulation, and prototype evaluation. Clinical deployment additionally requires a validated model/endpoint set, identity and access management, institutional key management, electronic-record integration, independent calculation verification, human approval workflow, change control, monitoring, disaster recovery, cybersecurity testing, quality management, usability engineering, and jurisdiction-specific medical-device assessment. See [SECURITY.md](SECURITY.md) for the concrete boundary and planned controls.
 
+## AI-assisted development
+
+GPT-5.6 was used as an AI engineering collaborator to help implement and review
+the longitudinal dosing workflows, endpoint framework, security controls, GUI, tests, and documentation.
+Scientific and clinical direction, validation requirements, and release decisions remain the responsibility of the project owner.
+
 ## Licence
 
 MIT.
