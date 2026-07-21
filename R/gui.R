@@ -31,19 +31,29 @@
 #' @param key Optional managed 32-byte key.
 #' @param models Session models in addition to encrypted registrations.
 #' @param endpoints Session endpoints in addition to encrypted registrations.
+#' @param session_workspace Create a separate ephemeral encrypted workspace for
+#'   every browser session. This is intended for hosted research demonstrations
+#'   and prevents application users from sharing a workspace directory.
 #' @param host,port,launch.browser Passed to [shiny::runApp()].
 #' @param allow_remote Explicitly permit a non-loopback bind for governed test deployments.
 #' @return Invisibly, the Shiny app.
 #' @export
 lator_gui <- function(workspace = NULL, path = NULL, passphrase = NULL, key = NULL,
                       models = NULL, endpoints = NULL, host = "127.0.0.1",
-                      port = NULL, launch.browser = TRUE, allow_remote = FALSE) {
+                      port = NULL, launch.browser = TRUE, allow_remote = FALSE,
+                      session_workspace = FALSE) {
   if (!host %in% c("127.0.0.1", "localhost", "::1") && !isTRUE(allow_remote)) {
     .lator_stop("Non-loopback hosting is disabled. Set `allow_remote = TRUE` only behind governed authentication and TLS.")
+  }
+  if (isTRUE(session_workspace) && !is.null(workspace)) {
+    .lator_stop("`workspace` cannot be supplied when `session_workspace = TRUE`.")
   }
   initial_workspace <- workspace
   if (!is.null(initial_workspace)) initial_workspace <- .lator_require_workspace(initial_workspace)
   if (is.null(initial_workspace) && (!is.null(passphrase) || !is.null(key))) {
+    if (isTRUE(session_workspace)) {
+      .lator_stop("`passphrase` and `key` cannot pre-unlock a session-isolated workspace.")
+    }
     initial_workspace <- lator_workspace(path, passphrase, key, create = TRUE)
   }
   supplied_models <- .lator_named_models(models)
@@ -66,6 +76,10 @@ lator_gui <- function(workspace = NULL, path = NULL, passphrase = NULL, key = NU
   )
 
   server <- function(input, output, session) {
+    session_path <- if (isTRUE(session_workspace)) {
+      base <- path %||% file.path(tempdir(), "LibeRator-cloud")
+      file.path(base, "sessions", gsub("[^A-Za-z0-9_-]", "-", session$token))
+    } else path
     state <- shiny::reactiveValues(
       workspace = initial_workspace, patient_id = NULL, models = supplied_models,
       endpoints = supplied_endpoints, model_id = NULL, endpoint_id = NULL,
@@ -100,7 +114,8 @@ lator_gui <- function(workspace = NULL, path = NULL, passphrase = NULL, key = NU
 
     shiny::observeEvent(input$lator_unlock, {
       tryCatch({
-        unlocked_workspace <- lator_workspace(path, input$lator_passphrase, create = TRUE)
+        unlocked_workspace <- lator_workspace(session_path, input$lator_passphrase,
+                                              create = TRUE)
         state$workspace <- unlocked_workspace
         hydrate(unlocked_workspace)
       }, error = function(error) shiny::showNotification(conditionMessage(error), type = "error", duration = 8))
@@ -196,6 +211,7 @@ lator_gui <- function(workspace = NULL, path = NULL, passphrase = NULL, key = NU
     }, ignoreInit = TRUE)
   }
   app <- shiny::shinyApp(ui, server)
+  if (is.null(launch.browser)) return(app)
   shiny::runApp(app, host = host, port = port, launch.browser = launch.browser)
   invisible(app)
 }

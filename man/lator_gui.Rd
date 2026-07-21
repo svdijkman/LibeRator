@@ -14,7 +14,8 @@ lator_gui(
   host = "127.0.0.1",
   port = NULL,
   launch.browser = TRUE,
-  allow_remote = FALSE
+  allow_remote = FALSE,
+  session_workspace = FALSE
 )
 }
 \arguments{
@@ -29,6 +30,10 @@ lator_gui(
 \item{models}{Session models in addition to encrypted registrations.}
 
 \item{endpoints}{Session endpoints in addition to encrypted registrations.}
+
+\item{session_workspace}{Create a separate ephemeral encrypted workspace for
+every browser session. This is intended for hosted research demonstrations
+and prevents application users from sharing a workspace directory.}
 
 \item{host, port, launch.browser}{Passed to [shiny::runApp()].}
 

@@ -1,3 +1,8 @@
+# LibeRator 0.2.1
+
+- Adds per-browser-session encrypted workspaces and a non-blocking Shiny app
+  return path for hosted research and teaching demonstrations.
+
 # LibeRator 0.1.1
 
 - Fixed workbench startup with a pre-unlocked workspace by removing reactive-value reads from the non-reactive server initialization path.
