@@ -1,7 +1,7 @@
 Package: LibeRator
 Type: Package
 Title: Adaptive Therapeutic Optimisation and Recommendation
-Version: 0.2.1
+Version: 0.2.2
 Authors@R: person("Sven C.", "van Dijkman",
     email = "svdijkman@users.noreply.github.com", role = c("aut", "cre"))
 Author: Sven C. van Dijkman [aut, cre]

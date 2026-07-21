@@ -1,3 +1,10 @@
+# LibeRator 0.2.2
+
+- Fixed empty-workspace GUI refreshes so every successive dose, covariate,
+  concentration, and state event appears immediately after its encrypted save.
+- Added an opt-in synthetic teaching seed and enabled it for the isolated
+  shinyapps.io demonstration sessions.
+
 # LibeRator 0.2.1
 
 - Adds per-browser-session encrypted workspaces and a non-blocking Shiny app

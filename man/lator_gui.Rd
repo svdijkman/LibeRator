@@ -15,7 +15,8 @@ lator_gui(
   port = NULL,
   launch.browser = TRUE,
   allow_remote = FALSE,
-  session_workspace = FALSE
+  session_workspace = FALSE,
+  teaching_example = FALSE
 )
 }
 \arguments{
@@ -34,6 +35,10 @@ lator_gui(
 \item{session_workspace}{Create a separate ephemeral encrypted workspace for
 every browser session. This is intended for hosted research demonstrations
 and prevents application users from sharing a workspace directory.}
+
+\item{teaching_example}{Seed an otherwise empty workspace with the synthetic
+AED teaching patient, model, and endpoint. Intended for demonstrations;
+the example is explicitly non-clinical.}
 
 \item{host, port, launch.browser}{Passed to [shiny::runApp()].}
 

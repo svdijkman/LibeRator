@@ -2,7 +2,7 @@
 
 **Adaptive Therapeutic Optimisation and Recommendation** for research and teaching.
 
-LibeRator is the longitudinal model-informed precision-dosing workbench in the LibeR ecosystem. It combines LibeRation's C++/automatic-differentiation PK/PD engine, models curated through LibeRary, and LibeRties local or remote queues. It is deliberately designed so that research workflows can later be hardened for clinical validation, but version 0.2.0 is not a medical device and does not issue autonomous treatment instructions.
+LibeRator is the longitudinal model-informed precision-dosing workbench in the LibeR ecosystem. It combines LibeRation's C++/automatic-differentiation PK/PD engine, models curated through LibeRary, and LibeRties local or remote queues. It is deliberately designed so that research workflows can later be hardened for clinical validation, but the current research package is not a medical device and does not issue autonomous treatment instructions.
 
 ## What is implemented
 

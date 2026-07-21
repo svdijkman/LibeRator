@@ -2,6 +2,8 @@
   if (!inherits(model, "nm_model")) .lator_stop("`model` must be a LibeRation nm_model.")
   config <- unclass(model$LIK_CONFIG)
   config$version <- NULL
+  supported <- names(formals(LibeRation::nm_lik_config))
+  config <- config[intersect(names(config), supported)]
   config$iov <- as.integer(iov)
   config$occasion_col <- occasion_col
   config <- do.call(LibeRation::nm_lik_config, config)
