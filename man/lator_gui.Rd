@@ -32,6 +32,10 @@ lator_gui(
 
 \item{endpoints}{Session endpoints in addition to encrypted registrations.}
 
+\item{host, port, launch.browser}{Passed to [shiny::runApp()].}
+
+\item{allow_remote}{Explicitly permit a non-loopback bind for governed test deployments.}
+
 \item{session_workspace}{Create a separate ephemeral encrypted workspace for
 every browser session. This is intended for hosted research demonstrations
 and prevents application users from sharing a workspace directory.}
@@ -39,10 +43,6 @@ and prevents application users from sharing a workspace directory.}
 \item{teaching_example}{Seed an otherwise empty workspace with the synthetic
 AED teaching patient, model, and endpoint. Intended for demonstrations;
 the example is explicitly non-clinical.}
-
-\item{host, port, launch.browser}{Passed to [shiny::runApp()].}
-
-\item{allow_remote}{Explicitly permit a non-loopback bind for governed test deployments.}
 }
 \value{
 Invisibly, the Shiny app.

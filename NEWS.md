@@ -1,3 +1,10 @@
+# LibeRator 0.2.3
+
+- Aligns package contracts and compatibility metadata with the versioned
+  LibeRation workspace/model schemas and LibeRties wire v2 release.
+- Adds consolidated ecosystem diagnostics, CI, citation, and release
+  provenance without changing the research-and-teaching clinical boundary.
+
 # LibeRator 0.2.2
 
 - Fixed empty-workspace GUI refreshes so every successive dose, covariate,
