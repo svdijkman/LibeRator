@@ -1,3 +1,9 @@
+# LibeRator 0.2.6
+
+- Publishes LibeRator in the LibeR 0.9 research-beta compatibility set with
+  explicit research/teaching evidence and a machine-readable statement that
+  autonomous clinical recommendation remains unqualified.
+
 # LibeRator 0.2.5
 
 - Restores the established high-resolution LibeR dove and applies the shared

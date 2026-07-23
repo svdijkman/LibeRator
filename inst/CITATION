@@ -1,10 +1,9 @@
 citHeader("To cite LibeRator in publications, use:")
 
-citEntry(
-  entry = "Manual",
+bibentry(
+  bibtype = "Manual",
   title = "LibeRator: Adaptive Therapeutic Optimisation and Recommendation",
   author = person("Sven C.", "van Dijkman"),
   year = "2026",
-  note = "R package version 0.2.4",
-  textVersion = "van Dijkman SC (2026). LibeRator: Adaptive Therapeutic Optimisation and Recommendation. R package version 0.2.4."
+  note = paste("R package version", meta$Version)
 )

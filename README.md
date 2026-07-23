@@ -4,6 +4,10 @@
 
 LibeRator is the longitudinal model-informed precision-dosing workbench in the LibeR ecosystem. It combines LibeRation's C++/automatic-differentiation PK/PD engine, models curated through LibeRary, and LibeRties local or remote queues. It is deliberately designed so that research workflows can later be hardened for clinical validation, but the current research package is not a medical device and does not issue autonomous treatment instructions.
 
+LibeRator is distributed as part of the LibeR 0.9 research beta. Install the
+exact [ecosystem compatibility set](../docs/INSTALL.md) and review
+`LibeRation::liber_support_matrix("LibeRator")` before using it in a study.
+
 ## What is implemented
 
 - Encrypted, authenticated pseudonymous patient workspaces with a tamper-evident audit chain, optimistic concurrency, immutable evidence events, and explicit corrections.
