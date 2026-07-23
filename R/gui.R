@@ -81,8 +81,11 @@ lator_gui <- function(workspace = NULL, path = NULL, passphrase = NULL, key = NU
     htmltools::tags$head(
       htmltools::tags$title("LibeRator"),
       if (nzchar(favicon_href)) htmltools::tags$link(rel = "icon", type = "image/svg+xml", href = favicon_href),
+      htmltools::tags$script(htmltools::HTML(
+        "(function(){try{var t=localStorage.getItem('liber.theme');if(t!=='dark'&&t!=='light'){var l=localStorage.getItem('liberatorTheme');t=l==='dark'?'dark':l==='light'?'light':(matchMedia('(prefers-color-scheme: dark)').matches?'dark':'light');}document.documentElement.setAttribute('data-liber-theme',t);}catch(e){}})();"
+      )),
       htmltools::tags$style(htmltools::HTML(
-        "html,body{margin:0;min-height:100%;background:#f1f6f6;font-family:Inter,Segoe UI,sans-serif}.lator-unlock{min-height:100vh;display:grid;place-items:center;background:radial-gradient(circle at 20% 10%,#dceeee,transparent 35%),#f4f8f8}.lator-unlock-card{width:min(430px,calc(100vw - 40px));background:#fff;border:1px solid #cbdede;border-radius:18px;padding:32px;box-shadow:0 18px 55px rgba(25,74,76,.13)}.lator-unlock-card h1{color:#145c60;margin:0}.lator-unlock-card p{color:#617779;line-height:1.5}.lator-unlock-card .form-control{border-radius:9px;border-color:#bdd4d4}.lator-unlock-card .btn{width:100%;background:#19787b;color:#fff;border:0;border-radius:9px;margin-top:12px}.lator-safety{font-size:12px;border-left:3px solid #39999a;padding-left:10px;margin-top:20px}"
+        "html,body{margin:0;min-height:100%;background:#f1f6f6;font-family:'Segoe UI',Arial,sans-serif}html[data-liber-theme='dark'] body{background:#152426}.lator-unlock{min-height:100vh;display:grid;place-items:center;background:radial-gradient(circle at 20% 10%,#dceeee,transparent 35%),#f4f8f8}.lator-unlock-card{width:min(430px,calc(100vw - 40px));background:#fff;border:1px solid #cbdede;border-radius:18px;padding:32px;box-shadow:0 18px 55px rgba(25,74,76,.13)}.lator-unlock-brand{display:flex;align-items:center;gap:13px;margin-bottom:4px}.lator-unlock-brand img{width:52px;height:52px}.lator-unlock-card h1{color:#145c60;margin:0}.lator-unlock-card p{color:#617779;line-height:1.5}.lator-unlock-version{display:inline-block;margin-bottom:10px;color:#617779;font-size:12px}.lator-unlock-card .form-control{border-radius:9px;border-color:#bdd4d4}.lator-unlock-card .btn{width:100%;background:#19787b;color:#fff;border:0;border-radius:9px;margin-top:12px}.lator-safety{font-size:12px;border-left:3px solid #39999a;padding-left:10px;margin-top:20px}"
       ))
     ),
     htmltools::tags$body(shiny::uiOutput("lator_app", container = htmltools::tags$div))
@@ -131,7 +134,12 @@ lator_gui <- function(workspace = NULL, path = NULL, passphrase = NULL, key = NU
     output$lator_app <- shiny::renderUI({
       if (is.null(state$workspace)) return(htmltools::tags$div(class = "lator-unlock",
         htmltools::tags$div(class = "lator-unlock-card",
-          htmltools::tags$h1("LibeRator"), htmltools::tags$p("Unlock or create the encrypted research workspace."),
+          htmltools::tags$div(class = "lator-unlock-brand",
+                             htmltools::tags$img(src = favicon_href, alt = ""),
+                             htmltools::tags$h1("LibeRator")),
+          htmltools::tags$span(class = "lator-unlock-version",
+                              paste0("Version ", utils::packageVersion("LibeRator"))),
+          htmltools::tags$p("Unlock or create the encrypted research workspace."),
           shiny::passwordInput("lator_passphrase", "Workspace passphrase", placeholder = "At least 12 characters"),
           shiny::actionButton("lator_unlock", "Unlock workspace"),
           htmltools::tags$p(class = "lator-safety", "Research and teaching use only. Outputs require qualified human review and are not autonomous treatment instructions.")

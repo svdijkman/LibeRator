@@ -1,3 +1,19 @@
+# LibeRator 0.2.5
+
+- Restores the established high-resolution LibeR dove and applies the shared
+  58 px header/32 px message-bar geometry.
+- Consolidates the teal clinical-research identity into semantic brand tokens,
+  adds the LibeR dove and version to workspace unlock, and shares theme
+  preference with the rest of the ecosystem.
+- Adds focus-managed dialogs and responsive drawers so patient navigation and
+  assessment controls remain reachable on narrow displays.
+
+# LibeRator 0.2.4
+
+- Adds deterministic analytic validation of longitudinal assimilation,
+  regimen selection, and future prediction for a virtual patient.
+- Adds a runnable teaching example and browser-level workbench startup coverage.
+
 # LibeRator 0.2.3
 
 - Aligns package contracts and compatibility metadata with the versioned

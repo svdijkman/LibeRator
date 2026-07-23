@@ -15,3 +15,11 @@ intermittent weight measurements, repeat dosing, TDM observations, a latent
 state boundary, and an illustrative therapeutic-range endpoint. It is meant
 for software teaching and tests; its target range is not a real dosing rule.
 }
+\examples{
+example <- lator_example_aed()
+assessment <- lator_assess(
+  example$patient, example$model, example$endpoint,
+  mode = "static", maxit = 20
+)
+assessment$eta_trajectory
+}

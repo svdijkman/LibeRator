@@ -5,6 +5,43 @@
   function value(x, fallback) { return x === undefined || x === null || x === "" ? fallback : x; }
   function number(x) { var n = Number(x); return isFinite(n) ? n : null; }
   function fmt(x, digits) { var n = Number(x); return isFinite(n) ? n.toFixed(digits === undefined ? 3 : digits).replace(/\.0+$/, "") : "—"; }
+  function initialDarkTheme(legacyKey) {
+    try {
+      var shared = localStorage.getItem("liber.theme");
+      if (shared === "dark" || shared === "light") return shared === "dark";
+      var legacy = localStorage.getItem(legacyKey);
+      if (legacy === "dark" || legacy === "1") return true;
+      if (legacy === "light" || legacy === "0") return false;
+    } catch (_) {}
+    return !!(window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches);
+  }
+  function storeTheme(dark, legacyKey) {
+    try {
+      localStorage.setItem("liber.theme", dark ? "dark" : "light");
+      localStorage.setItem(legacyKey, dark ? "dark" : "light");
+      document.documentElement.setAttribute("data-liber-theme", dark ? "dark" : "light");
+    } catch (_) {}
+  }
+  function useDialogFocus(onClose) {
+    var dialog = React.useRef(null), close = React.useRef(onClose);
+    close.current = onClose;
+    React.useEffect(function () {
+      var prior = document.activeElement, node = dialog.current;
+      function items() { return node ? Array.prototype.slice.call(node.querySelectorAll('button:not([disabled]),input:not([disabled]),select:not([disabled]),textarea:not([disabled]),a[href],[tabindex]:not([tabindex="-1"])')) : []; }
+      function keydown(event) {
+        if (event.key === "Escape") { event.preventDefault(); close.current(); return; }
+        if (event.key !== "Tab" || !node) return;
+        var candidates = items();
+        if (!candidates.length) { event.preventDefault(); node.focus(); return; }
+        if (event.shiftKey && document.activeElement === candidates[0]) { event.preventDefault(); candidates[candidates.length - 1].focus(); }
+        else if (!event.shiftKey && document.activeElement === candidates[candidates.length - 1]) { event.preventDefault(); candidates[0].focus(); }
+      }
+      document.addEventListener("keydown", keydown);
+      window.setTimeout(function () { var candidates = items(); (candidates[0] || node).focus(); }, 0);
+      return function () { document.removeEventListener("keydown", keydown); if (prior && prior.focus) prior.focus(); };
+    }, []);
+    return dialog;
+  }
   function emit(props, action, detail) {
     if (!window.Shiny || !window.Shiny.setInputValue) return;
     window.Shiny.setInputValue((props.inputId || "liberator_workbench") + "_event",
@@ -12,7 +49,7 @@
   }
   function Button(props) {
     return e("button", { type: "button", className: "lr-button " + value(props.className, ""),
-      disabled: !!props.disabled, title: props.title, onClick: props.onClick },
+      disabled: !!props.disabled, title: props.title, "aria-label": props.ariaLabel || props.title, onClick: props.onClick },
       props.icon ? e("span", { className: "lr-button-icon", "aria-hidden": "true" }, props.icon) : null,
       props.children);
   }
@@ -21,18 +58,14 @@
   function Panel(props) { return e("section", { className: "lr-panel " + value(props.className, "") },
     e("header", { className: "lr-panel-head" }, e("div", null, e("strong", null, props.title), props.subtitle ? e("span", null, props.subtitle) : null), props.actions || null),
     e("div", { className: "lr-panel-body" }, props.children)); }
-  function Logo() { return e("svg", { viewBox: "0 0 128 128", className: "lr-logo", "aria-hidden": "true" },
-    e("circle", { cx: 64, cy: 64, r: 55, fill: "currentColor" }),
-    e("path", { d: "M38 86V39h12v36h31v11H38Z", fill: "white" }),
-    e("path", { d: "M69 38h21v10H80v26H69V38Z", fill: "#eadff3" }),
-    e("circle", { cx: 91, cy: 82, r: 8, fill: "#ccb8df" })); }
+  function Logo() { return e("span", { className: "lr-logo lr-logo-fallback", "aria-hidden": "true" }, "L"); }
   function ThemeSwitch(props) { return e("label", { className: "lr-theme-switch", title: "Switch colour theme" },
     e("span", null, props.dark ? "Dark" : "Light"), e("input", { type: "checkbox", checked: props.dark, onChange: props.onChange }), e("i", null)); }
 
-  function Modal(props) { return e("div", { className: "lr-modal-layer", role: "presentation", onMouseDown: function (x) { if (x.target === x.currentTarget) props.onClose(); } },
-    e("section", { className: "lr-modal", role: "dialog", "aria-modal": "true" },
+  function Modal(props) { var dialog = useDialogFocus(props.onClose); return e("div", { className: "lr-modal-layer", role: "presentation", onMouseDown: function (x) { if (x.target === x.currentTarget) props.onClose(); } },
+    e("section", { ref: dialog, tabIndex: -1, className: "lr-modal", role: "dialog", "aria-modal": "true", "aria-label": props.title },
       e("header", null, e("div", null, e("strong", null, props.title), props.subtitle ? e("span", null, props.subtitle) : null),
-        e(Button, { className: "lr-icon-button", onClick: props.onClose, title: "Close" }, "×")),
+        e(Button, { className: "lr-icon-button", onClick: props.onClose, title: "Close", ariaLabel: "Close" }, "×")),
       e("div", { className: "lr-modal-body" }, props.children)));
   }
   function Field(props) { return e("label", { className: "lr-field " + value(props.className, "") }, e("span", null, props.label), props.children, props.help ? e("small", null, props.help) : null); }
@@ -150,7 +183,7 @@
 
   function Sidebar(props) {
     var search=React.useState(""), patients=list(props.patients).filter(function(p){return (String(p.patient_id)+" "+String(p.label)).toLowerCase().indexOf(search[0].toLowerCase())>=0;});
-    return e("aside",{className:"lr-sidebar"},e("div",{className:"lr-sidebar-title"},e("strong",null,"Patients"),e(Button,{className:"lr-small lr-primary",icon:"+",onClick:function(){props.open("patient");}},"New")),
+    return e("aside",{className:"lr-sidebar"+(props.drawerOpen?" open":"")},e("div",{className:"lr-sidebar-title"},e("strong",null,"Patients"),e(Button,{className:"lr-small lr-primary",icon:"+",onClick:function(){props.open("patient");}},"New")),
       e("div",{className:"lr-search"},e("span",null,"⌕"),e("input",{placeholder:"Search pseudonyms",value:search[0],onChange:function(x){search[1](x.target.value);}})),
       e("div",{className:"lr-patient-list"},patients.length?patients.map(function(p){return e("button",{type:"button",key:p.patient_id,className:props.patient&&props.patient.id===p.patient_id?"active":"",onClick:function(){emit(props,"select_patient",{id:p.patient_id});}},e("span",{className:"lr-avatar"},String(value(p.label,p.patient_id)).slice(0,2).toUpperCase()),e("span",null,e("strong",null,value(p.label,p.patient_id)),e("small",null,p.patient_id)),e(Badge,{tone:"neutral"},p.revision));}):e("div",{className:"lr-mini-empty"},"No patients yet")),
       e("div",{className:"lr-sidebar-section"},e("strong",null,"Evidence"),e("div",{className:"lr-action-grid"},e(Button,{disabled:!props.patient,icon:"◈",onClick:function(){props.open("dose");}},"Dose"),e(Button,{disabled:!props.patient,icon:"●",onClick:function(){props.open("concentration");}},"TDM"),e(Button,{disabled:!props.patient,icon:"◇",onClick:function(){props.open("covariate");}},"Covariate"),e(Button,{disabled:!props.patient,icon:"⋮",onClick:function(){props.open("state_boundary");}},"State"))),
@@ -158,7 +191,7 @@
   }
   function RightRail(props) {
     var endpoint=list(props.endpoints).filter(function(x){return x.id===props.selectedEndpoint;})[0], current=props.current, ready=props.patient&&props.selectedModel&&props.selectedEndpoint;
-    return e("aside",{className:"lr-right"},e(Panel,{title:"Current assessment",subtitle:current?current.mode+" posterior":"Awaiting TDM update"},
+    return e("aside",{className:"lr-right"+(props.drawerOpen?" open":"")},e(Panel,{title:"Current assessment",subtitle:current?current.mode+" posterior":"Awaiting TDM update"},
       current?e("div",null,e("div",{className:"lr-metrics"},e("div",null,e("span",null,"Convergence"),e("strong",null,current.convergence===0?"Successful":"Review")),e("div",null,e("span",null,"Fit time"),e("strong",null,fmt(current.diagnostics&&current.diagnostics.elapsed_total_seconds,2)+" s")),e("div",null,e("span",null,"Latent states"),e("strong",null,new Set(list(current.eta).map(function(x){return x.occasion;})).size)),list(current.warnings).length?e("div",null,e("span",null,"Data flags"),e("strong",null,list(current.warnings).length)):null),list(current.warnings).map(function(w,i){return e("div",{key:i,className:"lr-inline-warning"},w);})):e("p",{className:"lr-muted"},"Add at least one measured concentration, then estimate the patient's posterior PK state."),
       e("div",{className:"lr-stack"},e(Button,{className:"lr-primary",disabled:!ready,onClick:function(){emit(props,"assess",{mode:"static"});}},"Update static posterior"),e(Button,{disabled:!ready,onClick:function(){emit(props,"assess",{mode:"dynamic",process_scale:.1});}},"Update time-varying posterior"))),
       e(Panel,{title:"Therapeutic objective",subtitle:endpoint?endpoint.status:"No endpoint selected"},endpoint?e("div",null,e("strong",{className:"lr-target-name"},endpoint.name),endpoint.lower!==null&&endpoint.lower!==undefined?e("div",{className:"lr-range"},e("span",null,endpoint.lower+" "+endpoint.unit),e("i",null),e("b",null,endpoint.upper+" "+endpoint.unit)):null,e("p",{className:"lr-source"},value(endpoint.source,"No evidence source recorded"))):e("p",{className:"lr-muted"},"Select a versioned endpoint.")),
@@ -170,15 +203,23 @@
   }
 
   function LibeRatorWorkbench(props) {
-    var tab=React.useState("timeline"), modal=React.useState(null), dark=React.useState(function(){try{return window.localStorage.getItem("liberatorTheme")==="dark";}catch(x){return false;}});
+    var tab=React.useState("timeline"), modal=React.useState(null), dark=React.useState(function(){return initialDarkTheme("liberatorTheme");}),sidebarOpen=React.useState(false),railOpen=React.useState(false);
     React.useEffect(function(){if(props.regimen&&list(props.regimen.summary).length)tab[1]("regimens");},[props.regimen&&list(props.regimen.summary).length?props.regimen.summary[0].candidate_id:null]);
     React.useEffect(function(){if(props.prediction&&props.prediction.id)tab[1]("forecast");},[props.prediction&&props.prediction.id]);
-    function toggle(){var next=!dark[0];dark[1](next);try{window.localStorage.setItem("liberatorTheme",next?"dark":"light");}catch(x){}}
+    React.useEffect(function(){storeTheme(dark[0],"liberatorTheme");},[dark[0]]);
+    React.useEffect(function(){
+      function keydown(event){if(event.key==="Escape"){sidebarOpen[1](false);railOpen[1](false);}}
+      document.addEventListener("keydown",keydown);
+      return function(){document.removeEventListener("keydown",keydown);};
+    },[]);
+    function toggle(){dark[1](!dark[0]);}
+    function closeDrawers(){sidebarOpen[1](false);railOpen[1](false);}
     var tabs=[{id:"timeline",label:"Timeline"},{id:"posterior",label:"Individualisation"},{id:"regimens",label:"Regimens"},{id:"forecast",label:"Future prediction"},{id:"evidence",label:"Evidence ledger"}];
     return e("div",{className:"lr-shell "+(dark[0]?"lr-dark":"lr-light")},
-      e("header",{className:"lr-header"},e("div",{className:"lr-brand"},props.icon?e("img",{className:"lr-logo",src:props.icon,alt:""}):e(Logo),e("div",null,e("strong",null,"LibeRator"),e("span",null,"Adaptive Therapeutic Optimisation and Recommendation")),e(Badge,{tone:"research"},"RESEARCH")),e("div",{className:"lr-header-right"},props.patient?e("div",{className:"lr-context"},e("span",null,"Active patient"),e("strong",null,value(props.patient.label,props.patient.id))):null,e(ThemeSwitch,{dark:dark[0],onChange:toggle}))),
+      e("header",{className:"lr-header"},e("div",{className:"lr-brand"},props.icon?e("img",{className:"lr-logo",src:props.icon,alt:""}):e(Logo),e("div",null,e("strong",null,"LibeRator"),e("span",null,"Adaptive Therapeutic Optimisation and Recommendation")),e(Badge,{tone:"research"},"RESEARCH")),e("div",{className:"lr-header-right"},e("button",{type:"button",className:"lr-drawer-toggle lr-sidebar-toggle","aria-label":"Open patient navigation","aria-expanded":sidebarOpen[0],onClick:function(){sidebarOpen[1](!sidebarOpen[0]);railOpen[1](false);}},"☰"),e("button",{type:"button",className:"lr-drawer-toggle lr-rail-toggle","aria-label":"Open assessment panel","aria-expanded":railOpen[0],onClick:function(){railOpen[1](!railOpen[0]);sidebarOpen[1](false);}},"⌁"),props.patient?e("div",{className:"lr-context"},e("span",null,"Active patient"),e("strong",null,value(props.patient.label,props.patient.id))):null,e(ThemeSwitch,{dark:dark[0],onChange:toggle}))),
       e("div",{className:"lr-message lr-message-"+value(props.status&&props.status.level,"info")},e("i",null),e("span",null,value(props.status&&props.status.text,"Workbench ready"))),
-      e("div",{className:"lr-layout"},e(Sidebar,Object.assign({},props,{open:modal[1]})),e("main",{className:"lr-main"},e("div",{className:"lr-tabs"},tabs.map(function(x){return e("button",{type:"button",key:x.id,className:tab[0]===x.id?"active":"",onClick:function(){tab[1](x.id);}},x.label);})),e("div",{className:"lr-canvas"},tab[0]==="timeline"?e(Panel,{title:"Longitudinal response",subtitle:"Doses, samples and latent-state boundaries"},e(Timeline,props)):tab[0]==="posterior"?e(Panel,{title:"Posterior patient states",subtitle:"Population prior updated with this patient's evidence"},e(ParameterTable,props)):tab[0]==="regimens"?e(Panel,{title:"Candidate comparison",subtitle:"Select one candidate before generating its forecast"},e(RegimenTable,props)):tab[0]==="forecast"?e(Panel,{title:"Selected-regimen future prediction",subtitle:"Posterior median and uncertainty propagated under the proposed dosing schedule"},e(Forecast,props)):e(Panel,{title:"Immutable evidence ledger",subtitle:"Corrections append new evidence rather than replacing history"},e(EvidenceTable,props)))),e(RightRail,Object.assign({},props,{open:modal[1]}))),
+      (sidebarOpen[0]||railOpen[0])?e("button",{type:"button",className:"lr-drawer-backdrop","aria-label":"Close navigation and assessment panels",onClick:closeDrawers}):null,
+      e("div",{className:"lr-layout"},e(Sidebar,Object.assign({},props,{open:modal[1],drawerOpen:sidebarOpen[0]})),e("main",{className:"lr-main"},e("div",{className:"lr-tabs"},tabs.map(function(x){return e("button",{type:"button",key:x.id,className:tab[0]===x.id?"active":"",onClick:function(){tab[1](x.id);}},x.label);})),e("div",{className:"lr-canvas"},tab[0]==="timeline"?e(Panel,{title:"Longitudinal response",subtitle:"Doses, samples and latent-state boundaries"},e(Timeline,props)):tab[0]==="posterior"?e(Panel,{title:"Posterior patient states",subtitle:"Population prior updated with this patient's evidence"},e(ParameterTable,props)):tab[0]==="regimens"?e(Panel,{title:"Candidate comparison",subtitle:"Select one candidate before generating its forecast"},e(RegimenTable,props)):tab[0]==="forecast"?e(Panel,{title:"Selected-regimen future prediction",subtitle:"Posterior median and uncertainty propagated under the proposed dosing schedule"},e(Forecast,props)):e(Panel,{title:"Immutable evidence ledger",subtitle:"Corrections append new evidence rather than replacing history"},e(EvidenceTable,props)))),e(RightRail,Object.assign({},props,{open:modal[1],drawerOpen:railOpen[0]}))),
       e("footer",{className:"lr-footer"},e("span",null,"LibeRator v"+value(props.packageVersion,"0.1.0")),e("span",null,"Encrypted workspace · C++/automatic differentiation · Human review required")),
       modal[0]==="patient"?e(NewPatientModal,{owner:props,onClose:function(){modal[1](null);}}):modal[0]==="regimen"?e(RegimenModal,{owner:props,onClose:function(){modal[1](null);}}):["dose","concentration","covariate","state_boundary"].indexOf(modal[0])>=0?e(EventModal,{owner:props,kind:modal[0],onClose:function(){modal[1](null);}}):null);
   }

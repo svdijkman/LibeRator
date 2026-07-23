@@ -6,6 +6,13 @@
 #' for software teaching and tests; its target range is not a real dosing rule.
 #'
 #' @return Named list with `model`, `patient`, and `endpoint`.
+#' @examples
+#' example <- lator_example_aed()
+#' assessment <- lator_assess(
+#'   example$patient, example$model, example$endpoint,
+#'   mode = "static", maxit = 20
+#' )
+#' assessment$eta_trajectory
 #' @export
 lator_example_aed <- function() {
   model <- LibeRation::nm_model(
