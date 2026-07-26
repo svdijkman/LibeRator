@@ -1,3 +1,10 @@
+# LibeRator 0.2.7
+
+- Applies the ecosystem-wide non-fading busy-state behavior while retaining
+  the existing asynchronous patient and assessment task channels.
+- Increments the workbench asset version to invalidate cached GUI resources
+  after upgrading.
+
 # LibeRator 0.2.6
 
 - Publishes LibeRator in the LibeR 0.9 research-beta compatibility set with
