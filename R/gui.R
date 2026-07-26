@@ -92,6 +92,8 @@ lator_gui <- function(workspace = NULL, path = NULL, passphrase = NULL, key = NU
   )
 
   server <- function(input, output, session) {
+    tasks <- .liber_shared_task_registry(session)
+    task_signal <- shiny::reactiveVal(0L)
     session_path <- if (isTRUE(session_workspace)) {
       base <- path %||% file.path(tempdir(), "LibeRator-cloud")
       file.path(base, "sessions", gsub("[^A-Za-z0-9_-]", "-", session$token))
@@ -164,7 +166,8 @@ lator_gui <- function(workspace = NULL, path = NULL, passphrase = NULL, key = NU
         state$workspace, state$patient_id, state$models, state$endpoints,
         state$model_id, state$endpoint_id, state$regimen,
         state$selected_candidate, state$prediction, state$status,
-        icon = favicon_href
+        icon = favicon_href,
+        task = .liber_shared_task_snapshot(tasks)
       )
     })
 
@@ -213,14 +216,31 @@ lator_gui <- function(workspace = NULL, path = NULL, passphrase = NULL, key = NU
         } else if (action == "assess") {
           shiny::req(state$patient_id, state$model_id, state$endpoint_id)
           patient <- lator_patient_get(state$workspace, state$patient_id)
-          state$status <- list(level = "working", text = "Updating the individual posterior...")
-          assessment <- lator_assess(
-            patient, state$models[[state$model_id]], state$endpoints[[state$endpoint_id]],
-            mode = event$mode %||% "static", process_scale = as.numeric(event$process_scale %||% 0.1),
-            workspace = state$workspace
+          .liber_shared_task_start(
+            tasks, "LibeRator", ".lator_gui_background_task",
+            args = list(
+              operation = "assess",
+              arguments = list(
+                patient = patient,
+                model = state$models[[state$model_id]],
+                endpoint = state$endpoints[[state$endpoint_id]],
+                mode = as.character(event$mode %||% "static"),
+                process_scale = as.numeric(event$process_scale %||% 0.1)
+              )
+            ),
+            label = paste(event$mode %||% "static", "patient assessment"),
+            metadata = list(
+              operation = "assess",
+              patient_id = patient$patient_id,
+              patient_revision = patient$revision,
+              model_id = state$model_id,
+              endpoint_id = state$endpoint_id
+            )
           )
-          invalidate_workspace_data()
-          state$status <- list(level = "success", text = paste("Assessment completed in", round(assessment$diagnostics$elapsed_total_seconds, 2), "s"))
+          task_signal(task_signal() + 1L)
+          .liber_shared_task_notify(
+            session, "liberator_workbench", tasks
+          )
         } else if (action == "optimise") {
           shiny::req(state$patient_id)
           patient <- lator_patient_get(state$workspace, state$patient_id)
@@ -231,14 +251,32 @@ lator_gui <- function(workspace = NULL, path = NULL, passphrase = NULL, key = NU
             parse_numbers(event$amounts), parse_numbers(event$intervals),
             horizon = as.numeric(event$horizon %||% 168)
           )
-          state$status <- list(level = "working", text = "Comparing candidate regimens...")
-          state$regimen <- lator_regimen_optimise(
-            assessment, patient, candidates, nsim = as.integer(event$nsim %||% 100L),
-            grid_step = as.numeric(event$grid_step %||% 0.5)
+          .liber_shared_task_start(
+            tasks, "LibeRator", ".lator_gui_background_task",
+            args = list(
+              operation = "optimise",
+              arguments = list(
+                assessment = assessment,
+                patient = patient,
+                candidates = candidates,
+                nsim = as.integer(event$nsim %||% 100L),
+                grid_step = as.numeric(event$grid_step %||% 0.5)
+              )
+            ),
+            label = "Candidate regimen comparison",
+            metadata = list(
+              operation = "optimise",
+              patient_id = patient$patient_id,
+              patient_revision = patient$revision,
+              assessment_id = assessment$assessment_id
+            )
           )
+          task_signal(task_signal() + 1L)
           state$selected_candidate <- NULL
           state$prediction <- NULL
-          state$status <- list(level = "success", text = "Regimen comparison completed; select a regimen to forecast")
+          .liber_shared_task_notify(
+            session, "liberator_workbench", tasks
+          )
         } else if (action == "select_regimen") {
           shiny::req(state$regimen)
           candidate_id <- as.character(event$id %||% "")
@@ -248,14 +286,153 @@ lator_gui <- function(workspace = NULL, path = NULL, passphrase = NULL, key = NU
           state$status <- list(level = "info", text = paste("Selected", candidate_id, "for future prediction"))
         } else if (action == "predict_regimen") {
           shiny::req(state$regimen, state$selected_candidate)
-          state$prediction <- lator_regimen_predict(state$regimen, state$selected_candidate)
-          state$status <- list(level = "success", text = paste("Future prediction ready for", state$selected_candidate))
+          .liber_shared_task_start(
+            tasks, "LibeRator", ".lator_gui_background_task",
+            args = list(
+              operation = "predict",
+              arguments = list(
+                regimen = state$regimen,
+                candidate_id = state$selected_candidate
+              )
+            ),
+            label = "Selected-regimen future prediction",
+            metadata = list(
+              operation = "predict",
+              patient_id = state$patient_id,
+              candidate_id = state$selected_candidate,
+              assessment_id = state$regimen$assessment_id
+            )
+          )
+          task_signal(task_signal() + 1L)
+          .liber_shared_task_notify(
+            session, "liberator_workbench", tasks
+          )
+        } else if (action == "cancel_task") {
+          if (.liber_shared_task_cancel_all(tasks)) {
+            state$status <- list(
+              level = "warning", text = "Background calculation cancelled"
+            )
+            .liber_shared_task_notify(
+              session, "liberator_workbench", tasks
+            )
+          }
         }
       }, error = function(error) {
         state$status <- list(level = "error", text = conditionMessage(error))
         shiny::showNotification(conditionMessage(error), type = "error", duration = 9)
       })
     }, ignoreInit = TRUE)
+
+    shiny::observe({
+      task_signal()
+      if (!.liber_shared_task_active(tasks)) return()
+      shiny::invalidateLater(100, session)
+      .liber_shared_task_poll(tasks)
+      completed <- .liber_shared_task_take_completed(tasks)
+      if (!length(completed)) return()
+      for (job in completed) {
+        if (identical(job$status, "failed")) {
+          state$status <- list(level = "error", text = job$error)
+          shiny::showNotification(job$error, type = "error", duration = 9)
+          next
+        }
+        if (!identical(job$status, "completed")) next
+        operation <- job$metadata$operation
+        if (!identical(job$metadata$patient_id, state$patient_id)) {
+          state$status <- list(
+            level = "warning",
+            text = "The active patient changed; the stale result was discarded"
+          )
+          next
+        }
+        if (identical(operation, "assess")) {
+          patient <- lator_patient_get(state$workspace, state$patient_id)
+          if (!identical(
+            as.integer(patient$revision),
+            as.integer(job$metadata$patient_revision)
+          )) {
+            state$status <- list(
+              level = "warning",
+              text = paste(
+                "New patient evidence was recorded while the assessment ran;",
+                "the stale posterior was discarded"
+              )
+            )
+            next
+          }
+          assessment <- job$result
+          assessment$patient_revision <- patient$revision + 1L
+          patient$assessments <- c(patient$assessments, list(assessment))
+          lator_patient_save(
+            state$workspace, patient,
+            expected_revision = patient$revision,
+            actor = "local-session"
+          )
+          state$regimen <- NULL
+          state$selected_candidate <- NULL
+          state$prediction <- NULL
+          invalidate_workspace_data()
+          state$status <- list(
+            level = "success",
+            text = paste(
+              "Assessment completed in",
+              round(
+                assessment$diagnostics$elapsed_total_seconds, 2
+              ), "s"
+            )
+          )
+        } else if (identical(operation, "optimise")) {
+          patient <- lator_patient_get(state$workspace, state$patient_id)
+          latest <- if (length(patient$assessments)) {
+            utils::tail(patient$assessments, 1L)[[1L]]$assessment_id
+          } else ""
+          if (!identical(
+            as.integer(patient$revision),
+            as.integer(job$metadata$patient_revision)
+          ) || !identical(latest, job$metadata$assessment_id)) {
+            state$status <- list(
+              level = "warning",
+              text = "The patient assessment changed; the stale regimen result was discarded"
+            )
+            next
+          }
+          state$regimen <- job$result
+          state$selected_candidate <- NULL
+          state$prediction <- NULL
+          state$status <- list(
+            level = "success",
+            text = paste(
+              "Regimen comparison completed;",
+              "select a regimen to forecast"
+            )
+          )
+        } else if (identical(operation, "predict")) {
+          if (is.null(state$regimen) ||
+              !identical(
+                state$selected_candidate, job$metadata$candidate_id
+              ) ||
+              !identical(
+                state$regimen$assessment_id,
+                job$metadata$assessment_id
+              )) {
+            state$status <- list(
+              level = "warning",
+              text = "The selected regimen changed; the stale prediction was discarded"
+            )
+            next
+          }
+          state$prediction <- job$result
+          state$status <- list(
+            level = "success",
+            text = paste(
+              "Future prediction ready for",
+              state$selected_candidate
+            )
+          )
+        }
+      }
+      .liber_shared_task_notify(session, "liberator_workbench", tasks)
+    })
   }
   app <- shiny::shinyApp(ui, server)
   if (is.null(launch.browser)) return(app)

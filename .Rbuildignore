@@ -4,3 +4,4 @@
 ^\.queue-check$
 ^.*\.Rproj$
 ^\.Rproj\.user$
+^SECURITY\.md$

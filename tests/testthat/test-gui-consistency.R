@@ -11,8 +11,16 @@ test_that("therapeutic GUI retains shared theme, dove, and responsive controls",
     system.file("htmlwidgets", "liberatorExtras.css", package = "LibeRator"),
     warn = FALSE
   ), collapse = "\n")
+  design <- paste(readLines(
+    system.file("htmlwidgets", "liber-design-system.js", package = "LibeRator"),
+    warn = FALSE
+  ), collapse = "\n")
 
-  expect_match(script, 'localStorage\\.getItem\\("liber\\.theme"\\)')
+  expect_match(design, 'localStorage\\.getItem\\("liber\\.theme"\\)')
+  expect_match(design, "liber-task-state", fixed = TRUE)
+  expect_match(script, "LibeRDesign.theme", fixed = TRUE)
+  expect_match(script, "LibeRDesign.taskState", fixed = TRUE)
+  expect_match(script, "cancel_task", fixed = TRUE)
   favicon <- paste(readLines(
     system.file("assets", "favicon.svg", package = "LibeRator"),
     warn = FALSE

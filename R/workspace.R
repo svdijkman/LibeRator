@@ -1,25 +1,14 @@
 .lator_default_workspace <- function() {
-  if (.Platform$OS.type == "windows") {
-    home <- Sys.getenv("USERPROFILE", unset = path.expand("~"))
-    file.path(home, "Documents", "LibeR", "liberator-workspace")
-  } else file.path(path.expand("~"), "LibeR", "liberator-workspace")
+  .liber_shared_user_root("liberator-workspace")
 }
 
 .lator_config_path <- function(path) file.path(path, "workspace.json")
 
 .lator_publish_file <- function(temporary, path) {
-  backup <- paste0(path, ".previous")
-  if (file.exists(backup)) unlink(backup, force = TRUE)
-  had_previous <- file.exists(path)
-  if (had_previous && !file.rename(path, backup)) .lator_stop("Could not protect the previous workspace file: ", path)
-  published <- file.rename(temporary, path)
-  if (!published) {
-    if (had_previous) file.rename(backup, path)
-    .lator_stop("Could not publish workspace file: ", path)
-  }
-  if (file.exists(backup)) unlink(backup, force = TRUE)
-  try(Sys.chmod(path, mode = "0600", use_umask = FALSE), silent = TRUE)
-  invisible(path)
+  .liber_shared_publish_file(
+    temporary, path,
+    error = function(message) .lator_stop(message)
+  )
 }
 
 .lator_write_json <- function(value, path) {
@@ -179,14 +168,10 @@ print.lator_workspace <- function(x, ...) {
 
 .lator_with_lock <- function(workspace, name, operation, timeout = 5) {
   lock <- file.path(workspace$paths$locks, paste0(gsub("[^A-Za-z0-9_-]", "_", name), ".lock"))
-  started <- proc.time()[["elapsed"]]
-  repeat {
-    if (dir.create(lock, showWarnings = FALSE)) break
-    if (proc.time()[["elapsed"]] - started >= timeout) .lator_stop("Timed out acquiring workspace lock.")
-    Sys.sleep(0.01)
-  }
-  on.exit(unlink(lock, recursive = TRUE, force = TRUE), add = TRUE)
-  operation()
+  .liber_shared_with_lock(
+    lock, operation, timeout = timeout,
+    error = function(message) .lator_stop(message)
+  )
 }
 
 .lator_record_token <- function(id, key) {

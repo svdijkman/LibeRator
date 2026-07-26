@@ -20,6 +20,7 @@ License: MIT + file LICENSE
 Encoding: UTF-8
 Depends: R (>= 4.1.0)
 Imports:
+    callr,
     digest,
     htmltools,
     htmlwidgets,
@@ -31,7 +32,6 @@ Imports:
     stats,
     utils
 Suggests:
-    callr,
     knitr,
     LibeRary (>= 0.7.5),
     LibeRties (>= 0.7.3),

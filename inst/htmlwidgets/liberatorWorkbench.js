@@ -6,21 +6,10 @@
   function number(x) { var n = Number(x); return isFinite(n) ? n : null; }
   function fmt(x, digits) { var n = Number(x); return isFinite(n) ? n.toFixed(digits === undefined ? 3 : digits).replace(/\.0+$/, "") : "—"; }
   function initialDarkTheme(legacyKey) {
-    try {
-      var shared = localStorage.getItem("liber.theme");
-      if (shared === "dark" || shared === "light") return shared === "dark";
-      var legacy = localStorage.getItem(legacyKey);
-      if (legacy === "dark" || legacy === "1") return true;
-      if (legacy === "light" || legacy === "0") return false;
-    } catch (_) {}
-    return !!(window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches);
+    return window.LibeRDesign.theme.initialDark(legacyKey);
   }
   function storeTheme(dark, legacyKey) {
-    try {
-      localStorage.setItem("liber.theme", dark ? "dark" : "light");
-      localStorage.setItem(legacyKey, dark ? "dark" : "light");
-      document.documentElement.setAttribute("data-liber-theme", dark ? "dark" : "light");
-    } catch (_) {}
+    window.LibeRDesign.theme.store(dark, legacyKey, false);
   }
   function useDialogFocus(onClose) {
     var dialog = React.useRef(null), close = React.useRef(onClose);
@@ -204,6 +193,7 @@
 
   function LibeRatorWorkbench(props) {
     var tab=React.useState("timeline"), modal=React.useState(null), dark=React.useState(function(){return initialDarkTheme("liberatorTheme");}),sidebarOpen=React.useState(false),railOpen=React.useState(false);
+    var task=window.LibeRDesign.taskState.use(React,props.inputId,props.task);
     React.useEffect(function(){if(props.regimen&&list(props.regimen.summary).length)tab[1]("regimens");},[props.regimen&&list(props.regimen.summary).length?props.regimen.summary[0].candidate_id:null]);
     React.useEffect(function(){if(props.prediction&&props.prediction.id)tab[1]("forecast");},[props.prediction&&props.prediction.id]);
     React.useEffect(function(){storeTheme(dark[0],"liberatorTheme");},[dark[0]]);
@@ -217,7 +207,7 @@
     var tabs=[{id:"timeline",label:"Timeline"},{id:"posterior",label:"Individualisation"},{id:"regimens",label:"Regimens"},{id:"forecast",label:"Future prediction"},{id:"evidence",label:"Evidence ledger"}];
     return e("div",{className:"lr-shell "+(dark[0]?"lr-dark":"lr-light")},
       e("header",{className:"lr-header"},e("div",{className:"lr-brand"},props.icon?e("img",{className:"lr-logo",src:props.icon,alt:""}):e(Logo),e("div",null,e("strong",null,"LibeRator"),e("span",null,"Adaptive Therapeutic Optimisation and Recommendation")),e(Badge,{tone:"research"},"RESEARCH")),e("div",{className:"lr-header-right"},e("button",{type:"button",className:"lr-drawer-toggle lr-sidebar-toggle","aria-label":"Open patient navigation","aria-expanded":sidebarOpen[0],onClick:function(){sidebarOpen[1](!sidebarOpen[0]);railOpen[1](false);}},"☰"),e("button",{type:"button",className:"lr-drawer-toggle lr-rail-toggle","aria-label":"Open assessment panel","aria-expanded":railOpen[0],onClick:function(){railOpen[1](!railOpen[0]);sidebarOpen[1](false);}},"⌁"),props.patient?e("div",{className:"lr-context"},e("span",null,"Active patient"),e("strong",null,value(props.patient.label,props.patient.id))):null,e(ThemeSwitch,{dark:dark[0],onChange:toggle}))),
-      e("div",{className:"lr-message lr-message-"+value(props.status&&props.status.level,"info")},e("i",null),e("span",null,value(props.status&&props.status.text,"Workbench ready"))),
+      e("div",{className:"lr-message lr-message-"+value(props.status&&props.status.level,"info")},e("i",null),e("span",null,task.running?value(task.label,"Background calculation")+" is running":value(props.status&&props.status.text,"Workbench ready")),task.running&&task.cancellable?e(Button,{className:"lr-task-cancel",onClick:function(){emit(props,"cancel_task",{id:task.id});}},"Cancel"):null),
       (sidebarOpen[0]||railOpen[0])?e("button",{type:"button",className:"lr-drawer-backdrop","aria-label":"Close navigation and assessment panels",onClick:closeDrawers}):null,
       e("div",{className:"lr-layout"},e(Sidebar,Object.assign({},props,{open:modal[1],drawerOpen:sidebarOpen[0]})),e("main",{className:"lr-main"},e("div",{className:"lr-tabs"},tabs.map(function(x){return e("button",{type:"button",key:x.id,className:tab[0]===x.id?"active":"",onClick:function(){tab[1](x.id);}},x.label);})),e("div",{className:"lr-canvas"},tab[0]==="timeline"?e(Panel,{title:"Longitudinal response",subtitle:"Doses, samples and latent-state boundaries"},e(Timeline,props)):tab[0]==="posterior"?e(Panel,{title:"Posterior patient states",subtitle:"Population prior updated with this patient's evidence"},e(ParameterTable,props)):tab[0]==="regimens"?e(Panel,{title:"Candidate comparison",subtitle:"Select one candidate before generating its forecast"},e(RegimenTable,props)):tab[0]==="forecast"?e(Panel,{title:"Selected-regimen future prediction",subtitle:"Posterior median and uncertainty propagated under the proposed dosing schedule"},e(Forecast,props)):e(Panel,{title:"Immutable evidence ledger",subtitle:"Corrections append new evidence rather than replacing history"},e(EvidenceTable,props)))),e(RightRail,Object.assign({},props,{open:modal[1],drawerOpen:railOpen[0]}))),
       e("footer",{className:"lr-footer"},e("span",null,"LibeRator v"+value(props.packageVersion,"0.1.0")),e("span",null,"Encrypted workspace · C++/automatic differentiation · Human review required")),

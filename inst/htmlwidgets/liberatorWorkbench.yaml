@@ -2,6 +2,8 @@ dependencies:
   - name: liberator-workbench-style
     version: 0.2.6
     src: htmlwidgets
+    script: liber-design-system.js
     stylesheet:
+      - liber-design-system.css
       - liberatorWorkbench.css
       - liberatorExtras.css

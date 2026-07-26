@@ -11,7 +11,9 @@
                                selected_endpoint = NULL, regimen = NULL,
                                selected_candidate = NULL, prediction = NULL,
                                status = list(level = "info", text = "Workbench ready"),
-                               icon = NULL) {
+                               icon = NULL,
+                               task = list(running = FALSE, id = "", label = "",
+                                           cancellable = FALSE)) {
   patients <- lator_patient_list(workspace)
   patient <- if (!is.null(patient_id) && patient_id %in% patients$patient_id) {
     lator_patient_get(workspace, patient_id)
@@ -62,7 +64,7 @@
       probabilities = as.numeric(prediction$interval_probabilities),
       generatedAt = prediction$generated_at
     ),
-    icon = icon,
+    icon = icon, task = task,
     status = status, packageVersion = tryCatch(
       as.character(utils::packageVersion("LibeRator")), error = function(error) "0.1.0"
     ),
