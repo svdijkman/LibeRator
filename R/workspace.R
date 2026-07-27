@@ -1,5 +1,16 @@
 .lator_default_workspace <- function() {
-  .liber_shared_user_root("liberator-workspace")
+  configured <- Sys.getenv("LIBERATOR_HOME", unset = "")
+  path <- .liber_shared_user_root(
+    "liberator-workspace", envvar = "LIBERATOR_HOME",
+    root_name = "LibeR-data"
+  )
+  if (!nzchar(configured) && !dir.exists(path)) {
+    legacy <- .liber_shared_user_root(
+      "liberator-workspace", root_name = "LibeR"
+    )
+    if (dir.exists(legacy)) path <- legacy
+  }
+  normalizePath(path, winslash = "/", mustWork = FALSE)
 }
 
 .lator_config_path <- function(path) file.path(path, "workspace.json")
@@ -99,7 +110,11 @@
 #' identifiers are deliberately outside the schema; use a pseudonym generated
 #' by the controlling study or institution.
 #'
-#' @param path Workspace directory.
+#' @param path Workspace directory. The default is
+#'   `Documents/LibeR-data/liberator-workspace` on Windows and
+#'   `~/LibeR-data/liberator-workspace` elsewhere. Existing legacy workspaces
+#'   under `LibeR/liberator-workspace` remain discoverable. Set
+#'   `LIBERATOR_HOME` to override the default.
 #' @param passphrase Session passphrase of at least 12 characters.
 #' @param key Optional 32-byte raw key for managed deployments.
 #' @param create Create a missing workspace.

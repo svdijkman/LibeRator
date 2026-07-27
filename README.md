@@ -19,6 +19,11 @@ exact [ecosystem compatibility set](../docs/INSTALL.md) and review
 - Validated LibeRary model import, encrypted local model registration, and typed LibeRties individualisation/regimen jobs that never transmit a workspace key.
 - A React/Shiny workbench with a professional teal light/dark theme, patient timeline, evidence-entry popups, posterior-state display, endpoint provenance, selectable regimen comparison, and future-prediction chart.
 
+Persistent patient workspaces default to
+`Documents/LibeR-data/liberator-workspace` on Windows and
+`~/LibeR-data/liberator-workspace` elsewhere. Set `LIBERATOR_HOME` to use a
+managed location.
+
 ## Synthetic teaching example
 
 ```r
