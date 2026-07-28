@@ -1,3 +1,46 @@
+.lr-field textarea {
+  width: 100%;
+  min-height: 72px;
+  padding: 6px 8px;
+  resize: vertical;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  color: var(--text);
+  background: var(--input);
+  font: inherit;
+}
+
+.lr-endpoint-template-row { cursor: pointer; }
+.lr-endpoint-template-row td:first-child { width: 42px; text-align: center; }
+.lr-endpoint-template-row .lr-source {
+  display: block;
+  max-width: 310px;
+  white-space: normal;
+}
+.lr-endpoint-template-row .lr-badge { margin-left: 7px; }
+.lr-endpoint-template-row.lr-selected td { background: var(--brand-soft); }
+.lr-endpoint-template-row.lr-selected td:first-child {
+  box-shadow: inset 3px 0 var(--brand);
+}
+.lr-endpoint-template-form {
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px solid var(--line);
+}
+.lr-endpoint-template-form h3 {
+  margin: 0 0 4px;
+  color: var(--brand);
+  font-size: 13px;
+}
+.lr-endpoint-template-form > p { margin: 0 0 12px; }
+.lr-preset-callout {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  margin: 7px 0 11px;
+}
+.lr-preset-callout span { color: var(--muted); font-size: 9px; line-height: 1.4; }
+
 .lr-inline-warning {
   margin: 0 0 7px;
   padding: 7px 8px;
@@ -105,6 +148,152 @@
   outline-color: #fff;
 }
 
+.lr-label-action {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: 9px;
+  color: var(--muted);
+  font-size: 10px;
+}
+
+.lr-button.lr-add-medication {
+  width: 25px;
+  min-width: 25px;
+  min-height: 25px;
+  padding: 0;
+  border-color: var(--brand);
+  border-radius: 50%;
+  color: var(--brand);
+  background: var(--brand-soft);
+  font-size: 17px;
+  line-height: 1;
+}
+
+.lr-label-action + select {
+  margin-top: 4px;
+}
+
+.lr-input-action {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 27px;
+  align-items: center;
+  gap: 6px;
+}
+
+.lr-input-action .lr-button.lr-add-medication {
+  width: 27px;
+  min-width: 27px;
+  min-height: 27px;
+}
+
+.lr-patient-delete {
+  padding: 7px 10px 10px;
+}
+
+.lr-button.lr-danger {
+  color: #fff;
+  border-color: #a83f4b;
+  background: #b94b58;
+}
+
+.lr-button.lr-danger:hover:not(:disabled) {
+  border-color: #923440;
+  background: #a83f4b;
+}
+
+.lr-danger-callout {
+  margin-bottom: 14px;
+  padding: 11px;
+  border-left: 3px solid var(--red);
+  border-radius: 6px;
+  color: var(--text);
+  background: color-mix(in srgb, var(--red) 12%, var(--surface));
+}
+
+.lr-danger-callout p {
+  margin: 4px 0 0;
+  color: var(--muted);
+  font-size: 10px;
+  line-height: 1.45;
+}
+
+.lr-individual-profile {
+  margin-bottom: 16px;
+  padding-bottom: 14px;
+  border-bottom: 1px solid var(--line);
+}
+
+.lr-individual-profile svg {
+  display: block;
+  width: 100%;
+  max-height: 340px;
+}
+
+.lr-individual-tables {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.lr-individual-profile h3,
+.lr-individual-tables h3 {
+  margin: 0 0 8px;
+  font-size: 11px;
+  color: var(--text);
+}
+
+.lr-stacked-forecasts {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.lr-forecast-card {
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: var(--surface-2);
+}
+
+.lr-forecast-card .lr-callout {
+  margin-bottom: 0;
+}
+
+.lr-check-row {
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr);
+  align-items: start;
+  gap: 9px;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  color: var(--text);
+  background: var(--surface-2);
+  cursor: pointer;
+}
+
+.lr-check-row input {
+  width: 16px;
+  height: 16px;
+  margin: 1px 0 0;
+  accent-color: var(--brand);
+}
+
+.lr-check-row span {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.lr-check-row small {
+  display: block;
+  color: var(--muted);
+  font-size: 9px;
+  line-height: 1.35;
+}
+
 @media (max-width: 1050px) {
   .lr-layout {
     grid-template-columns: 220px minmax(0, 1fr);
@@ -179,5 +368,9 @@
 
   .lr-tabs button {
     flex: 0 0 auto;
+  }
+
+  .lr-individual-tables {
+    grid-template-columns: 1fr;
   }
 }

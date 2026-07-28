@@ -11,6 +11,7 @@ lator_gui(
   key = NULL,
   models = NULL,
   endpoints = NULL,
+  library_root = NULL,
   host = "127.0.0.1",
   port = NULL,
   launch.browser = TRUE,
@@ -32,6 +33,9 @@ lator_gui(
 
 \item{endpoints}{Session endpoints in addition to encrypted registrations.}
 
+\item{library_root}{Optional LibeRary catalogue root used by automatic
+qualified-model selection.}
+
 \item{host, port, launch.browser}{Passed to [shiny::runApp()].}
 
 \item{allow_remote}{Explicitly permit a non-loopback bind for governed test deployments.}
@@ -51,6 +55,6 @@ Invisibly, the Shiny app.
 By default the server binds only to loopback. Exposing it to another host is
 deliberately blocked unless `allow_remote = TRUE`; production deployment
 additionally requires institutional authentication, TLS, authorization,
-backup, monitoring, validation, and clinical governance outside this
-research package.
+backup, monitoring, validation, and clinical governance. The current
+Research label denotes validation status, not a separate product edition.
 }

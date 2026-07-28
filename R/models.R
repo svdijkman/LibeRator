@@ -41,6 +41,13 @@
 
 .lator_model_catalog_path <- function(workspace) file.path(workspace$paths$models, "catalog.enc")
 
+.lator_selection_model_key <- function(selection) {
+  paste0(
+    "liberary-", selection$selected_model_id, "-",
+    substr(selection$selected_qualification_id %||% "unqualified", 1L, 24L)
+  )
+}
+
 #' Register an encrypted LibeRation model for individualisation
 #' @param workspace Unlocked workspace.
 #' @param model A LibeRation `nm_model`.
@@ -100,9 +107,13 @@ lator_model_register <- function(workspace, model, id = NULL, name = NULL,
 #' @param library_id LibeRary catalogue id.
 #' @param root LibeRary catalogue root.
 #' @param allow_unvalidated Permit an entry whose status is not `validated`.
+#' @param qualification_id Optional current clinical-use qualification id to
+#'   bind into model provenance.
 #' @return A compiled, serializable LibeRation `nm_model` with catalogue provenance.
 #' @export
-lator_model_from_liberary <- function(library_id, root = NULL, allow_unvalidated = FALSE) {
+lator_model_from_liberary <- function(library_id, root = NULL,
+                                      allow_unvalidated = FALSE,
+                                      qualification_id = NULL) {
   if (!requireNamespace("LibeRary", quietly = TRUE)) .lator_stop("Install LibeRary to import catalogue models.")
   library_id <- .lator_scalar(library_id, "library_id")
   get_args <- list(library_id = library_id)
@@ -117,12 +128,35 @@ lator_model_from_liberary <- function(library_id, root = NULL, allow_unvalidated
   model_args <- list(library_id = library_id)
   if (!is.null(root)) model_args$root <- root
   control <- LibeRation::nm_control_read(do.call(LibeRary::library_model, model_args), strict = TRUE)
+  clinical_qualification <- NULL
+  if (!is.null(qualification_id) && nzchar(as.character(qualification_id))) {
+    qualifications <- .lator_liberary_api(
+      "library_clinical_qualifications"
+    )
+    qualification_args <- list(
+      library_id = library_id, current = TRUE
+    )
+    if (!is.null(root)) qualification_args$root <- root
+    records <- do.call(qualifications, qualification_args)
+    matched <- Filter(function(record) {
+      identical(
+        as.character(record$qualification_id),
+        as.character(qualification_id)
+      )
+    }, records)
+    if (length(matched) != 1L ||
+        !identical(matched[[1L]]$status, "qualified")) {
+      .lator_stop("The requested current qualified clinical-use record is unavailable.")
+    }
+    clinical_qualification <- matched[[1L]]
+  }
   provenance <- list(
     source = "LibeRary", library_id = library_id,
     library_version = entry$manifest$version %||% "", status_at_import = status,
     unvalidated_override = !identical(tolower(status), "validated"),
     imported_at = .lator_now(), evidence = entry$manifest$provenance %||% list(),
-    qualification = entry$manifest$qualification %||% list()
+    qualification = entry$manifest$qualification %||% list(),
+    clinical_qualification = clinical_qualification
   )
   attr(control$model, "name") <- entry$manifest$title %||% library_id
   attr(control$model, "library_provenance") <- provenance

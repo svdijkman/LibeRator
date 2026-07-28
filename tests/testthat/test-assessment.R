@@ -4,6 +4,8 @@ test_that("static and dynamic assessments use the C++ individual objective", {
   expect_s3_class(static, "lator_assessment")
   expect_equal(static$convergence, 0L)
   expect_equal(nrow(static$eta_trajectory), 1L)
+  expect_true(all(c("CL", "V") %in% static$individual_parameters$parameter))
+  expect_true(all(c("TIME", "IPRED", "DV") %in% names(static$predictions)))
   expect_true(is.finite(static$diagnostics$gradient_max))
 
   dynamic <- lator_assess(lator_test_patient(boundary = TRUE), lator_test_model(), endpoint,

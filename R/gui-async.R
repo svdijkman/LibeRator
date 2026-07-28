@@ -20,8 +20,11 @@
       nsim = arguments$nsim,
       grid_step = arguments$grid_step
     ),
-    predict = lator_regimen_predict(
-      arguments$regimen, arguments$candidate_id
-    )
+    predict = stats::setNames(lapply(
+      as.character(arguments$candidate_id),
+      function(candidate_id) {
+        lator_regimen_predict(arguments$regimen, candidate_id)
+      }
+    ), as.character(arguments$candidate_id))
   )
 }

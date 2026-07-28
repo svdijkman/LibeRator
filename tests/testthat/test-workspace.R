@@ -39,3 +39,24 @@ test_that("optimistic revisions prevent overwriting another session", {
   stale <- lator_patient_add_event(original, "note", 2, value = "stale")
   expect_error(lator_patient_save(workspace, stale), "revision conflict")
 })
+
+test_that("patient deletion requires explicit confirmation and remains audited", {
+  workspace <- lator_workspace(
+    tempfile("lator-delete-"), "delete patient test passphrase"
+  )
+  lator_patient_save(workspace, lator_patient_new("P-DELETE"))
+  expect_error(
+    lator_patient_delete(workspace, "P-DELETE", "yes"),
+    "typing YES exactly"
+  )
+  expect_true("P-DELETE" %in% lator_patient_list(workspace)$patient_id)
+  expect_true(lator_patient_delete(workspace, "P-DELETE", "YES"))
+  expect_false("P-DELETE" %in% lator_patient_list(workspace)$patient_id)
+  expect_error(lator_patient_get(workspace, "P-DELETE"), "Unknown patient")
+  audit <- lator_workspace_audit(workspace)
+  expect_true(any(vapply(
+    audit, function(event) identical(event$action, "patient_deleted"),
+    logical(1)
+  )))
+  expect_true(isTRUE(attr(audit, "valid")))
+})

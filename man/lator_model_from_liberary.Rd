@@ -4,7 +4,12 @@
 \alias{lator_model_from_liberary}
 \title{Import a LibeRary catalogue model}
 \usage{
-lator_model_from_liberary(library_id, root = NULL, allow_unvalidated = FALSE)
+lator_model_from_liberary(
+  library_id,
+  root = NULL,
+  allow_unvalidated = FALSE,
+  qualification_id = NULL
+)
 }
 \arguments{
 \item{library_id}{LibeRary catalogue id.}
@@ -12,6 +17,9 @@ lator_model_from_liberary(library_id, root = NULL, allow_unvalidated = FALSE)
 \item{root}{LibeRary catalogue root.}
 
 \item{allow_unvalidated}{Permit an entry whose status is not `validated`.}
+
+\item{qualification_id}{Optional current clinical-use qualification id to
+bind into model provenance.}
 }
 \value{
 A compiled, serializable LibeRation `nm_model` with catalogue provenance.

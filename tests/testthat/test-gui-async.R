@@ -15,6 +15,19 @@ test_that("future prediction background entry point preserves selection", {
     "predict",
     list(regimen = compared, candidate_id = selected)
   )
-  expect_s3_class(prediction, "lator_future_prediction")
-  expect_identical(prediction$candidate_id, selected)
+  expect_named(prediction, selected)
+  expect_s3_class(prediction[[selected]], "lator_future_prediction")
+  expect_identical(prediction[[selected]]$candidate_id, selected)
+
+  selected_many <- compared$summary$candidate_id[seq_len(min(
+    2L, nrow(compared$summary)
+  ))]
+  predictions <- .lator_gui_background_task(
+    "predict",
+    list(regimen = compared, candidate_id = selected_many)
+  )
+  expect_named(predictions, selected_many)
+  expect_true(all(vapply(
+    predictions, inherits, logical(1), "lator_future_prediction"
+  )))
 })

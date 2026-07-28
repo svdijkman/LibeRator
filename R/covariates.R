@@ -198,3 +198,40 @@ lator_covariate_at <- function(patient, name, times,
   }
   list(data = data, evidence = evidence, warnings = unique(warnings))
 }
+
+.lator_treatment_covariates <- function(patient, names, times) {
+  names <- as.character(names %||% character())
+  candidates <- names[
+    grepl("^(COMED|TRT|DDI)_", toupper(names))
+  ]
+  recorded <- .lator_active_events(patient, types = "covariate")
+  recorded_names <- if (length(recorded)) {
+    toupper(vapply(recorded, `[[`, character(1), "name"))
+  } else character()
+  # Explicit effective-dated evidence is more informative than the treatment
+  # profile fallback and permits start/stop or changing interaction states.
+  candidates <- candidates[
+    !toupper(candidates) %in% recorded_names
+  ]
+  if (!length(candidates)) return(list())
+  medications <- lator_patient_medications(patient)
+  active <- medications[
+    medications$treatment_status %in% "active", , drop = FALSE
+  ]
+  tokens <- if (nrow(active)) {
+    toupper(gsub("[^A-Za-z0-9]+", "_", active$drug))
+  } else character()
+  stats::setNames(lapply(candidates, function(name) {
+    requested <- sub("^(COMED|TRT|DDI)_", "", toupper(name))
+    value <- as.numeric(requested %in% tokens)
+    list(
+      value = rep(value, length(times)),
+      evidence = list(
+        source = "patient-treatment-profile",
+        requested_drug_token = requested,
+        matched_medications = active$drug[tokens == requested],
+        status = if (value == 1) "present" else "absent"
+      )
+    )
+  }), candidates)
+}

@@ -2,13 +2,14 @@
   events <- .lator_active_events(patient, types = types)
   if (!length(events)) return(events)
   matched <- Filter(function(event) {
-    event_drug <- as.character(event$metadata$drug %||% event$name %||% "")
-    identical(tolower(trimws(event_drug)), tolower(trimws(analyte)))
+    event_target <- if (identical(event$type, "concentration")) {
+      event$metadata$analyte %||% event$name
+    } else {
+      event$metadata$drug %||% event$name
+    }
+    event_target <- as.character(event_target %||% "")
+    identical(tolower(trimws(event_target)), tolower(trimws(analyte)))
   }, events)
-  if (!length(matched)) {
-    names <- unique(tolower(vapply(events, function(event) as.character(event$metadata$drug %||% event$name), character(1))))
-    if (length(names) == 1L) matched <- events
-  }
   matched
 }
 
@@ -98,14 +99,24 @@
   data <- data[order(data$TIME, priority), , drop = FALSE]
   rownames(data) <- NULL
 
-  covariates <- .lator_resolve_covariates(
-    patient, model$COVARIATES, data$TIME, covariate_policies, cutoff
+  treatment_covariates <- .lator_treatment_covariates(
+    patient, model$COVARIATES, data$TIME
   )
-  for (name in model$COVARIATES) data[[name]] <- covariates$data[[name]]
+  measured_covariates <- setdiff(
+    model$COVARIATES, names(treatment_covariates)
+  )
+  covariates <- .lator_resolve_covariates(
+    patient, measured_covariates, data$TIME, covariate_policies, cutoff
+  )
+  for (name in measured_covariates) data[[name]] <- covariates$data[[name]]
+  for (name in names(treatment_covariates)) {
+    data[[name]] <- treatment_covariates[[name]]$value
+    covariates$evidence[[name]] <- treatment_covariates[[name]]$evidence
+  }
   # A pre-change row must use the previous effective covariate value. This is
   # distinct from LOCF at the exact time, which correctly selects the new value.
   prechange <- data$.LATOR_ROLE == "prechange"
-  if (any(prechange) && length(model$COVARIATES)) for (name in model$COVARIATES) {
+  if (any(prechange) && length(measured_covariates)) for (name in measured_covariates) {
     policy <- covariate_policies[[name]] %||% covariate_policies[[toupper(name)]] %||% list(method = "locf")
     earlier <- do.call(lator_covariate_at, c(
       list(patient = patient, name = name, times = data$TIME[prechange] - sqrt(.Machine$double.eps), cutoff = cutoff),
@@ -156,6 +167,63 @@
   }))
 }
 
+.lator_model_with_individual_outputs <- function(model) {
+  catalog <- LibeRation::nm_model_outputs(model)
+  assigned <- catalog$name[
+    catalog$source %in% c("model assignment", "post-ADVAN prediction") &
+      catalog$selectable %in% TRUE
+  ]
+  model$OUTPUT <- unique(c(model$OUTPUT %||% character(), assigned))
+  model
+}
+
+.lator_individual_parameters <- function(fit) {
+  predictions <- as.data.frame(fit$predictions)
+  selected <- intersect(
+    fit$model$OUTPUT %||% character(), names(predictions)
+  )
+  selected <- setdiff(
+    selected,
+    c("PRED", "IPRED", "RES", "IRES", "WRES", "IWRES", "CWRES",
+      grep("^ETA[0-9]", selected, value = TRUE),
+      grep("^A[0-9]+$", selected, value = TRUE))
+  )
+  if (!length(selected)) {
+    return(data.frame(
+      occasion = integer(), time = numeric(), parameter = character(),
+      value = numeric(), stringsAsFactors = FALSE
+    ))
+  }
+  occasion <- if ("OCC" %in% names(predictions)) {
+    as.integer(predictions$OCC)
+  } else rep(1L, nrow(predictions))
+  groups <- split(seq_len(nrow(predictions)), occasion)
+  rows <- unlist(lapply(names(groups), function(group) {
+    indices <- groups[[group]]
+    lapply(selected, function(parameter) {
+      values <- suppressWarnings(as.numeric(predictions[[parameter]][indices]))
+      usable <- which(is.finite(values))
+      if (!length(usable)) return(NULL)
+      index <- indices[[utils::tail(usable, 1L)]]
+      data.frame(
+        occasion = as.integer(group),
+        time = as.numeric(predictions$TIME[[index]]),
+        parameter = parameter,
+        value = as.numeric(predictions[[parameter]][[index]]),
+        stringsAsFactors = FALSE
+      )
+    })
+  }), recursive = FALSE)
+  rows <- Filter(Negate(is.null), rows)
+  if (!length(rows)) {
+    return(data.frame(
+      occasion = integer(), time = numeric(), parameter = character(),
+      value = numeric(), stringsAsFactors = FALSE
+    ))
+  }
+  do.call(rbind, rows)
+}
+
 #' Longitudinal Bayesian patient assessment
 #'
 #' Each call creates an immutable assessment tied to hashes of its patient
@@ -192,6 +260,7 @@ lator_assess <- function(patient, model, endpoint, analyte = endpoint$drug,
   mode <- match.arg(mode)
   cutoff <- .lator_number(cutoff, "cutoff", finite = FALSE)
   prepared_model <- if (mode == "dynamic") .lator_dynamic_model(model) else model
+  prepared_model <- .lator_model_with_individual_outputs(prepared_model)
   prepared <- .lator_patient_dataset(
     patient, prepared_model, analyte, cutoff, covariate_policies,
     dynamic = mode == "dynamic", state_times = state_times
@@ -219,6 +288,7 @@ lator_assess <- function(patient, model, endpoint, analyte = endpoint$drug,
     policy_hash = .lator_hash(covariate_policies), endpoint = endpoint,
     model_provenance = attr(model, "library_provenance", exact = TRUE) %||% list(),
     eta = fit$eta, eta_covariance = fit$eta_covariance, eta_trajectory = trajectory,
+    individual_parameters = .lator_individual_parameters(fit),
     predictions = fit$predictions, data = fit$data, covariate_policies = covariate_policies,
     covariate_evidence = prepared$evidence,
     endpoint_evaluation = current_endpoint, convergence = fit$convergence,

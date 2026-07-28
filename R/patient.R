@@ -12,8 +12,11 @@
   if (!inherits(patient, "lator_patient") || !identical(patient$schema, "liberator.patient") ||
       as.integer(patient$version) != 1L) .lator_stop("Invalid LibeRator patient record.")
   patient$patient_id <- .lator_scalar(patient$patient_id, "patient_id", max_chars = 128L)
-  if (!is.list(patient$events) || !is.list(patient$assessments) || !is.list(patient$therapies)) {
-    .lator_stop("Patient timelines, assessments, and therapies must be lists.")
+  patient$model_selections <- patient$model_selections %||% list()
+  patient$therapies <- patient$therapies %||% list()
+  if (!is.list(patient$events) || !is.list(patient$assessments) ||
+      !is.list(patient$therapies) || !is.list(patient$model_selections)) {
+    .lator_stop("Patient timelines, assessments, therapies, and model selections must be lists.")
   }
   ids <- vapply(patient$events, function(event) as.character(event$event_id %||% ""), character(1))
   if (any(!nzchar(ids)) || anyDuplicated(ids)) .lator_stop("Patient event ids must be unique.")
@@ -46,6 +49,7 @@ lator_patient_new <- function(patient_id, study_id = "", label = "", metadata = 
     patient_id = patient_id, study_id = study_id, label = label,
     metadata = metadata, created_at = now, updated_at = now,
     events = list(), therapies = list(), assessments = list(),
+    model_selections = list(),
     status = "active"
   ), class = "lator_patient")
 }
@@ -54,8 +58,225 @@ lator_patient_new <- function(patient_id, study_id = "", label = "", metadata = 
 print.lator_patient <- function(x, ...) {
   cat("LibeRator longitudinal patient\n")
   cat("  pseudonym:", x$patient_id, " revision:", x$revision, "\n")
-  cat("  events:", length(x$events), " assessments:", length(x$assessments), "\n")
+  cat("  events:", length(x$events), " assessments:", length(x$assessments),
+      " therapies:", length(x$therapies %||% list()),
+      " model selections:", length(x$model_selections %||% list()), "\n")
   invisible(x)
+}
+
+.lator_drug_key <- function(drug) {
+  drug <- tolower(.lator_scalar(drug, "drug", max_chars = 128L))
+  key <- gsub("[^a-z0-9]+", "-", drug)
+  key <- gsub("(^-+|-+$)", "", key)
+  if (!nzchar(key)) .lator_stop("The drug name cannot form a stable key.")
+  key
+}
+
+.lator_patient_endpoint_instance_key <- function(patient, drug, endpoint) {
+  patient <- .lator_validate_patient(patient)
+  endpoint <- lator_endpoint_validate(endpoint)
+  paste0(
+    "patient-", substr(.lator_hash(patient$patient_id), 1L, 12L),
+    "-", .lator_drug_key(drug), "-", endpoint$id, "@", endpoint$version
+  )
+}
+
+.lator_empty_medications <- function() data.frame(
+  key = character(), drug = character(), therapeutic_class = character(),
+  monitoring_analytes = character(),
+  last_dose_time = numeric(), endpoint_key = character(),
+  treatment_status = character(),
+  stringsAsFactors = FALSE
+)
+
+#' Add a medication to a patient treatment profile
+#'
+#' A medication can be represented before its first dose record is available.
+#' Dose and TDM evidence remain separate immutable timeline events.
+#'
+#' @param patient Patient record.
+#' @param drug Medication name.
+#' @param therapeutic_class Optional medication-class label used for endpoint
+#'   family suggestions.
+#' @param monitoring_analytes Optional drug metabolites or related analytes
+#'   that may be selected when recording TDM evidence.
+#' @return Updated patient record. Persist it with [lator_patient_save()].
+#' @export
+lator_patient_medication_add <- function(
+    patient, drug, therapeutic_class = "",
+    monitoring_analytes = character()) {
+  patient <- .lator_validate_patient(patient)
+  drug <- .lator_scalar(drug, "drug", max_chars = 128L)
+  therapeutic_class <- .lator_scalar(
+    therapeutic_class, "therapeutic_class", allow_empty = TRUE,
+    max_chars = 128L
+  )
+  monitoring_analytes <- unique(trimws(as.character(
+    monitoring_analytes %||% character()
+  )))
+  monitoring_analytes <- monitoring_analytes[
+    !is.na(monitoring_analytes) & nzchar(monitoring_analytes)
+  ]
+  if (any(nchar(monitoring_analytes) > 128L)) {
+    .lator_stop("Monitoring analyte names may contain at most 128 characters.")
+  }
+  key <- .lator_drug_key(drug)
+  if (!is.null(patient$therapies[[key]])) {
+    .lator_stop("Medication `", drug, "` is already in this patient profile.")
+  }
+  now <- .lator_now()
+  patient$therapies[[key]] <- list(
+    schema = "liberator.therapy_profile", schema_version = 1L,
+    drug = drug, therapeutic_class = therapeutic_class,
+    monitoring_analytes = monitoring_analytes,
+    treatment_status = "active", added_at = now,
+    endpoint_key = "", endpoint_id = "", endpoint_version = "",
+    endpoint_hash = "", selected_at = "",
+    endpoint_history = list()
+  )
+  patient$updated_at <- now
+  patient
+}
+
+#' List medications represented on a patient timeline
+#'
+#' The list combines explicit treatment profiles with active dose evidence and
+#' retains any endpoint preference already recorded for each medication. A
+#' dose-discontinuation workflow can later supersede or qualify this evidence;
+#' absence of a recent dose is not silently interpreted as discontinuation.
+#'
+#' @param patient Patient record.
+#' @param cutoff Latest patient-timeline time to inspect.
+#' @return A data frame with one row per recorded medication.
+#' @export
+lator_patient_medications <- function(patient, cutoff = Inf) {
+  patient <- .lator_validate_patient(patient)
+  cutoff <- .lator_number(cutoff, "cutoff", finite = FALSE)
+  doses <- .lator_active_events(patient, types = "dose", cutoff = cutoff)
+  dose_keys <- if (length(doses)) {
+    vapply(doses, function(event) .lator_drug_key(
+      event$metadata$drug %||% event$name
+    ), character(1))
+  } else character()
+  groups <- if (length(doses)) split(doses, dose_keys) else list()
+  keys <- unique(c(names(groups), names(patient$therapies)))
+  if (!length(keys)) return(.lator_empty_medications())
+  rows <- lapply(keys, function(key) {
+    events <- groups[[key]] %||% list()
+    latest <- if (length(events)) {
+      events[[which.max(vapply(events, `[[`, numeric(1), "time"))]]
+    } else NULL
+    profile <- patient$therapies[[key]] %||% list()
+    drug <- if (!is.null(latest)) {
+      latest$metadata$drug %||% latest$name
+    } else profile$drug
+    event_class <- if (!is.null(latest)) {
+      as.character(latest$metadata$therapeutic_class %||% "")
+    } else ""
+    data.frame(
+      key = key,
+      drug = as.character(drug),
+      therapeutic_class = as.character(
+        if (nzchar(event_class)) event_class else
+          profile$therapeutic_class %||% ""
+      ),
+      monitoring_analytes = paste(
+        unique(as.character(profile$monitoring_analytes %||% character())),
+        collapse = "|"
+      ),
+      last_dose_time = if (is.null(latest)) NA_real_ else as.numeric(latest$time),
+      endpoint_key = as.character(profile$endpoint_key %||% ""),
+      treatment_status = as.character(
+        profile$treatment_status %||% "active"
+      ),
+      stringsAsFactors = FALSE
+    )
+  })
+  output <- do.call(rbind, rows)
+  output <- output[
+    order(is.na(output$last_dose_time), -output$last_dose_time, output$drug),
+    , drop = FALSE
+  ]
+  rownames(output) <- NULL
+  output
+}
+
+#' Record a medication-specific endpoint preference
+#'
+#' @param patient Patient record.
+#' @param drug Medication name represented by dose evidence.
+#' @param endpoint_key Stable patient-assignment key. GUI assignments use a
+#'   patient-specific key derived from the endpoint identity and version.
+#' @param endpoint Endpoint definition.
+#' @param therapeutic_class Optional medication-class label.
+#' @return Updated patient record. Persist it with [lator_patient_save()].
+#' @export
+lator_patient_endpoint_set <- function(
+    patient, drug, endpoint_key, endpoint, therapeutic_class = "") {
+  patient <- .lator_validate_patient(patient)
+  drug <- .lator_scalar(drug, "drug", max_chars = 128L)
+  endpoint_key <- .lator_scalar(
+    endpoint_key, "endpoint_key", max_chars = 256L
+  )
+  endpoint <- lator_endpoint_validate(endpoint)
+  if (!identical(.lator_drug_key(endpoint$drug), .lator_drug_key(drug))) {
+    .lator_stop(
+      "Endpoint drug `", endpoint$drug,
+      "` does not match selected medication `", drug, "`."
+    )
+  }
+  key <- .lator_drug_key(drug)
+  existing <- patient$therapies[[key]] %||% list()
+  history <- existing$endpoint_history %||% list()
+  if (!length(history) && nzchar(as.character(
+    existing$endpoint_key %||% ""
+  ))) {
+    history[[1L]] <- existing[c(
+      "endpoint_key", "endpoint_id", "endpoint_version", "endpoint_hash",
+      "selected_at"
+    )]
+  }
+  selection <- list(
+    endpoint_key = endpoint_key, endpoint_id = endpoint$id,
+    endpoint_version = endpoint$version,
+    endpoint_hash = .lator_hash(endpoint), selected_at = .lator_now(),
+    endpoint_snapshot = endpoint
+  )
+  last <- if (length(history)) history[[length(history)]] else NULL
+  if (is.null(last) ||
+      !identical(last$endpoint_key, selection$endpoint_key) ||
+      !identical(last$endpoint_hash, selection$endpoint_hash)) {
+    history[[length(history) + 1L]] <- selection
+  }
+  patient$therapies[[key]] <- list(
+    schema = "liberator.therapy_profile", schema_version = 1L,
+    drug = drug, therapeutic_class = .lator_scalar(
+      therapeutic_class, "therapeutic_class", allow_empty = TRUE,
+      max_chars = 128L
+    ),
+    treatment_status = existing$treatment_status %||% "active",
+    added_at = existing$added_at %||% .lator_now(),
+    monitoring_analytes = existing$monitoring_analytes %||% character(),
+    endpoint_key = selection$endpoint_key,
+    endpoint_id = selection$endpoint_id,
+    endpoint_version = selection$endpoint_version,
+    endpoint_hash = selection$endpoint_hash,
+    selected_at = selection$selected_at,
+    endpoint_snapshot = endpoint,
+    endpoint_history = history
+  )
+  patient$updated_at <- .lator_now()
+  patient
+}
+
+#' Retrieve a medication-specific endpoint preference
+#' @param patient Patient record.
+#' @param drug Medication name.
+#' @return A therapy-profile list, or `NULL`.
+#' @export
+lator_patient_endpoint_get <- function(patient, drug) {
+  patient <- .lator_validate_patient(patient)
+  patient$therapies[[.lator_drug_key(drug)]] %||% NULL
 }
 
 .lator_event_time <- function(time) {
@@ -183,9 +404,53 @@ lator_patient_save <- function(workspace, patient,
       workspace, if (is.null(stored)) "patient_created" else "patient_updated",
       "patient", patient$patient_id,
       detail = list(revision = patient$revision, event_count = length(patient$events),
-                    assessment_count = length(patient$assessments)), actor = actor
+                    assessment_count = length(patient$assessments),
+                    therapy_count = length(patient$therapies %||% list()),
+                    model_selection_count = length(patient$model_selections %||% list())),
+      actor = actor
     )
     patient
+  })
+}
+
+#' Permanently delete an encrypted patient record
+#'
+#' The encrypted record and catalogue entry are removed. A minimal deletion
+#' event remains in the encrypted audit chain so the destructive action can be
+#' accounted for.
+#'
+#' @param workspace Unlocked workspace.
+#' @param patient_id Patient pseudonym.
+#' @param confirmation Must be exactly `"YES"`.
+#' @param actor Audit actor.
+#' @return Invisibly `TRUE`.
+#' @export
+lator_patient_delete <- function(
+    workspace, patient_id, confirmation, actor = "local-session") {
+  workspace <- .lator_require_workspace(workspace)
+  patient_id <- .lator_scalar(patient_id, "patient_id")
+  confirmation <- .lator_scalar(
+    confirmation, "confirmation", max_chars = 16L
+  )
+  if (!identical(confirmation, "YES")) {
+    .lator_stop("Patient deletion requires typing YES exactly.")
+  }
+  .lator_with_lock(workspace, "workspace-write", function() {
+    path <- .lator_patient_path(workspace, patient_id)
+    if (!file.exists(path)) {
+      .lator_stop("Unknown patient pseudonym: ", patient_id)
+    }
+    if (!isTRUE(unlink(path) == 0L) || file.exists(path)) {
+      .lator_stop("Unable to delete the encrypted patient record.")
+    }
+    catalog <- .lator_catalog_read(workspace)
+    catalog$patients[[patient_id]] <- NULL
+    .lator_atomic_encrypt_save(catalog, workspace$paths$catalog, workspace$key)
+    .lator_audit_append(
+      workspace, "patient_deleted", "patient", patient_id,
+      detail = list(confirmed = TRUE), actor = actor
+    )
+    invisible(TRUE)
   })
 }
 

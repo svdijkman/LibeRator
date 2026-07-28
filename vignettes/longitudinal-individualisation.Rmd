@@ -11,6 +11,10 @@ vignette: >
 knitr::opts_chunk$set(collapse = TRUE, comment = "#>")
 ```
 
+LibeRator is one product designed toward eventual clinical use. Its current
+**Research** label communicates that clinical validation is not yet complete;
+it does not identify a separate research-only edition.
+
 LibeRator separates four things that are often mixed together in a dosing script:
 
 1. immutable patient evidence;
@@ -34,6 +38,24 @@ lator_covariate_at(
 ```
 
 The weight scheduled at hour 168 is explicitly missing. LOCF can still be an appropriate modelling policy, but the resolved value carries the `resolved_after_missing` status, source event, age, and missing reason. A population fallback is used only when the caller supplies it explicitly.
+
+Medication records are added to the treatment profile before entering doses or
+TDM. Optional monitored analytes keep active metabolites linked to their parent
+treatment:
+
+```{r medication, eval=FALSE}
+patient <- lator_patient_medication_add(
+  example$patient, "carbamazepine", "antiseizure",
+  monitoring_analytes = "carbamazepine-10,11-epoxide"
+)
+```
+
+Model covariates named `COMED_<DRUG>`, `TRT_<DRUG>`, or `DDI_<DRUG>` are
+resolved from these active treatment profiles. This activates an interaction
+effect only when the model explicitly defines one; LibeRator does not infer an
+effect size or mechanism from the medication list. Explicit effective-dated
+covariate records with the same name override the profile fallback, supporting
+interaction start/stop states along the patient timeline.
 
 ## Static and dynamic patient states
 
@@ -66,15 +88,23 @@ comparison <- lator_regimen_optimise(
 )
 comparison$summary
 
-# Promote a deliberately selected candidate to a separate forecast artifact.
-selected <- comparison$summary$candidate_id[[1L]]
-forecast <- lator_regimen_predict(comparison, selected)
-forecast$forecast
+# Promote deliberately selected candidates to separate forecast artifacts.
+selected <- comparison$summary$candidate_id[1:2]
+forecasts <- lapply(
+  selected,
+  function(candidate_id) lator_regimen_predict(comparison, candidate_id)
+)
+forecasts[[1L]]$forecast
 ```
 
 Each posterior draw replays the complete dosing history before the future candidate regimen. For the AED endpoint, the default score is distance from the midpoint of the supplied therapeutic range. Other endpoint objects can evaluate pre-transplant windows, AUC/trough ranges, or fraction of time above a longitudinal MIC.
 
-The optimisation step already generates candidate trajectories efficiently. `lator_regimen_predict()` does not silently re-fit or re-simulate them; it creates a linked forecast artifact from the selected candidate and retains its uncertainty, regimen, assessment identifier, and endpoint evaluation. This keeps the transition from ranked options to a future prediction explicit and reviewable.
+The optimisation step already generates candidate trajectories efficiently.
+`lator_regimen_predict()` does not silently re-fit or re-simulate them; it
+creates linked forecast artifacts from the selected candidates and retains
+their uncertainty, regimens, assessment identifier, and endpoint evaluations.
+The GUI stacks selected forecast plots vertically for comparison. This keeps
+the transition from ranked options to future prediction explicit and reviewable.
 
 ## Graphical workbench
 
@@ -87,8 +117,16 @@ lator_patient_save(workspace, example$patient)
 lator_gui(
   workspace = workspace,
   models = list(aed = example$model),
-  endpoints = list(aed = example$endpoint)
+  endpoints = list(aed = example$endpoint),
+  library_root = "~/LibeR-data/library"
 )
 ```
 
-The workbench is a research interface. A clinical deployment needs the additional model governance, identity, authorization, safety, independent validation, and operational controls described in `SECURITY.md`.
+The **Find best model** action evaluates only current, scoped clinical-use
+qualifications from LibeRary and fails closed when no model is suitable or when
+the leading candidates are too close to distinguish safely. The workbench
+retains the complete patient-context snapshot, qualification identifier, model
+hash, score components, blockers, and selection criteria. Clinical deployment
+of this same product still needs the additional model governance, identity,
+authorization, safety, independent validation, and operational controls
+described in `SECURITY.md`.

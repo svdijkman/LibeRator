@@ -1,6 +1,8 @@
 #' LibeRator: Adaptive Therapeutic Optimisation and Recommendation
 #'
-#' LibeRator is a research and teaching package. Its model-based outputs are
+#' LibeRator is designed toward eventual clinical model-informed precision
+#' dosing. The current Research label describes its validation status, not a
+#' separate or intentionally reduced product edition. Model-based outputs are
 #' hypotheses for review by qualified professionals, not autonomous treatment
 #' instructions or validated clinical recommendations.
 #'

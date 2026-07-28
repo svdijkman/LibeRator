@@ -30,6 +30,8 @@ last dose interval.}
 }
 \description{
 The optimisation target is the midpoint of the supplied range. No drug
-ranges are hard-coded because ranges depend on assay, matrix, indication,
-population, sampling time, and institutional policy.
+constructor requires an explicit range because targets depend on assay,
+matrix, indication, population, sampling time, and institutional policy.
+The GUI may prefill an editable, provenance-labelled drug reference range
+when one is available.
 }

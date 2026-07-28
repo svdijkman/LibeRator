@@ -19,6 +19,23 @@ test_that("hosted dosing GUI uses a separate workspace path per session", {
   )))
 })
 
+test_that("pre-unlocked workspace hydrates outside a reactive consumer", {
+  workspace <- lator_workspace(
+    tempfile("lator-startup-"),
+    "pre-unlocked startup test passphrase"
+  )
+  lator_patient_save(
+    workspace,
+    lator_patient_new("P-STARTUP-001")
+  )
+  app <- lator_gui(workspace = workspace, launch.browser = NULL)
+  server <- app[["serverFuncSource"]]()
+  session <- shiny::MockShinySession$new()
+  on.exit(session$close(), add = TRUE)
+
+  expect_no_error(server(session$input, session$output, session))
+})
+
 test_that("empty-workspace GUI refreshes after every successive evidence write", {
   root <- tempfile("lator-empty-gui-")
   app <- lator_gui(
@@ -36,25 +53,360 @@ test_that("empty-workspace GUI refreshes after every successive evidence write",
     session$flushReact()
     expect_equal(workbench_payload()$patient$id, "P-EMPTY-001")
     expect_equal(workbench_payload()$patient$revision, 1L)
+    session$setInputs(liberator_workbench_event = list(
+      action = "add_medication", drug = "Example AED",
+      therapeutic_class = "antiseizure",
+      configure_endpoint = FALSE, nonce = 2
+    ))
+    session$flushReact()
 
     evidence <- list(
-      list(type = "dose", time = "0", name = "Example AED", value = "300", unit = "mg"),
+      list(type = "dose", time = "0", name = "Example AED", treatment_drug = "Example AED", value = "300", unit = "mg"),
       list(type = "covariate", time = "1", name = "WT", value = "68", unit = "kg"),
-      list(type = "dose", time = "12", name = "Example AED", value = "300", unit = "mg"),
-      list(type = "concentration", time = "14", name = "Example AED", value = "5.2", unit = "mg/L")
+      list(type = "dose", time = "12", name = "Example AED", treatment_drug = "Example AED", value = "300", unit = "mg"),
+      list(type = "concentration", time = "14", name = "Example AED", treatment_drug = "Example AED", value = "5.2", unit = "mg/L")
     )
     for (index in seq_along(evidence)) {
-      event <- c(list(action = "add_event", nonce = index + 1L), evidence[[index]])
+      event <- c(list(action = "add_event", nonce = index + 2L), evidence[[index]])
       session$setInputs(liberator_workbench_event = event)
       session$flushReact()
       expect_length(workbench_payload()$events, index)
-      expect_equal(workbench_payload()$patient$revision, index + 1L)
-      expect_equal(state$data_revision, index + 1L)
+      expect_equal(workbench_payload()$patient$revision, index + 2L)
+      expect_equal(state$data_revision, index + 2L)
     }
 
     stored <- lator_patient_get(state$workspace, "P-EMPTY-001")
     expect_equal(vapply(stored$events, `[[`, character(1), "type"),
                  c("dose", "covariate", "dose", "concentration"))
+  })
+})
+
+test_that("endpoint-library choice creates, registers, and selects an endpoint", {
+  root <- tempfile("lator-endpoint-gui-")
+  app <- lator_gui(
+    path = root, passphrase = "endpoint library test passphrase",
+    launch.browser = NULL
+  )
+  server <- app[["serverFuncSource"]]()
+
+  shiny::testServer(server, {
+    session$flushReact()
+    session$setInputs(liberator_workbench_event = list(
+      action = "new_patient", patient_id = "P-ENDPOINT-001",
+      study_id = "TEST", label = "Endpoint test", nonce = 1
+    ))
+    session$flushReact()
+    session$setInputs(liberator_workbench_event = list(
+      action = "add_medication", drug = "Drug A",
+      therapeutic_class = "antiseizure",
+      configure_endpoint = FALSE, nonce = 2
+    ))
+    session$flushReact()
+    session$setInputs(liberator_workbench_event = list(
+      action = "create_endpoint",
+      template_id = "template-aed-range",
+      values = list(
+        drug = "Drug A", unit = "mg/L", lower = "2", upper = "8",
+        source = "Institutional protocol", status = "reviewed",
+        version = "1.2.0"
+      ),
+      nonce = 3
+    ))
+    session$flushReact()
+
+    original_key <- state$endpoint_id
+    expect_match(original_key, "patient-.+-drug-a-aed-drug-a@1.2.0")
+    expect_true(original_key %in% names(state$patient_endpoints))
+    expect_equal(
+      state$patient_endpoints[[state$endpoint_id]]$source,
+      "Institutional protocol"
+    )
+    expect_equal(workbench_payload()$selectedEndpoint, state$endpoint_id)
+    expect_match(state$status$text, "Created and selected endpoint")
+
+    restored <- .lator_registered_endpoints(state$workspace)
+    expect_length(restored, 0L)
+    patient <- lator_patient_get(state$workspace, "P-ENDPOINT-001")
+    expect_equal(
+      lator_patient_endpoint_get(patient, "Drug A")$endpoint_key,
+      original_key
+    )
+
+    session$setInputs(liberator_workbench_event = list(
+      action = "revise_endpoint",
+      original_key = original_key,
+      template_id = "template-aed-range",
+      values = list(
+        drug = "Drug A", unit = "mg/L", lower = "3", upper = "7",
+        source = "Individual reviewed target", status = "reviewed",
+        version = "1.2.1"
+      ),
+      nonce = 4
+    ))
+    session$flushReact()
+    revised_key <- state$endpoint_id
+    expect_match(revised_key, "patient-.+-drug-a-aed-drug-a@1.2.1")
+    expect_equal(
+      state$patient_endpoints[[state$endpoint_id]]$rules$lower, 3
+    )
+    patient <- lator_patient_get(state$workspace, "P-ENDPOINT-001")
+    profile <- lator_patient_endpoint_get(patient, "Drug A")
+    expect_equal(profile$endpoint_key, revised_key)
+    expect_length(profile$endpoint_history, 2L)
+    expect_equal(
+      state$patient_endpoints[[state$endpoint_id]]$metadata$supersedes_endpoint_key,
+      original_key
+    )
+    expect_match(state$status$text, "revised endpoint")
+  })
+})
+
+test_that("medication switching restores each drug-specific endpoint", {
+  root <- tempfile("lator-multidrug-gui-")
+  app <- lator_gui(
+    path = root, passphrase = "multi medication test passphrase",
+    launch.browser = NULL
+  )
+  server <- app[["serverFuncSource"]]()
+
+  shiny::testServer(server, {
+    session$flushReact()
+    session$setInputs(liberator_workbench_event = list(
+      action = "new_patient", patient_id = "P-MULTI-001",
+      study_id = "TEST", label = "Multi medication", nonce = 1
+    ))
+    session$setInputs(liberator_workbench_event = list(
+      action = "add_medication", drug = "phenytoin",
+      therapeutic_class = "antiseizure",
+      configure_endpoint = TRUE, nonce = 2
+    ))
+    session$flushReact()
+    expect_equal(state$drug_id, "phenytoin")
+    expect_gt(state$endpoint_prompt, 0L)
+    session$setInputs(liberator_workbench_event = list(
+      action = "create_endpoint", template_id = "template-aed-range",
+      values = list(
+        drug = "phenytoin", lower = "10", upper = "20", unit = "mg/L",
+        source = "Reviewed local protocol", status = "reviewed",
+        version = "1.0.0"
+      ), nonce = 3
+    ))
+    session$flushReact()
+    phenytoin_endpoint <- state$endpoint_id
+
+    session$setInputs(liberator_workbench_event = list(
+      action = "add_medication", drug = "warfarin",
+      therapeutic_class = "vitamin-k-antagonist",
+      configure_endpoint = TRUE, nonce = 4
+    ))
+    session$flushReact()
+    expect_equal(state$drug_id, "warfarin")
+    expect_null(state$endpoint_id)
+    session$setInputs(liberator_workbench_event = list(
+      action = "create_endpoint", template_id = "template-warfarin",
+      values = list(
+        drug = "warfarin", lower = "2", upper = "3",
+        target_fraction = "0.65", source = "Reviewed local protocol",
+        status = "reviewed", version = "1.0.0"
+      ), nonce = 5
+    ))
+    session$flushReact()
+    warfarin_endpoint <- state$endpoint_id
+    expect_false(identical(phenytoin_endpoint, warfarin_endpoint))
+
+    session$setInputs(liberator_workbench_event = list(
+      action = "select_drug", id = "phenytoin", nonce = 6
+    ))
+    session$flushReact()
+    expect_equal(state$endpoint_id, phenytoin_endpoint)
+
+    session$setInputs(liberator_workbench_event = list(
+      action = "select_drug", id = "warfarin", nonce = 7
+    ))
+    session$flushReact()
+    expect_equal(state$endpoint_id, warfarin_endpoint)
+    expect_setequal(
+      vapply(workbench_payload()$medications, `[[`, character(1), "key"),
+      c("phenytoin", "warfarin")
+    )
+  })
+})
+
+test_that("adding treatment medication can hand off to endpoint selection", {
+  root <- tempfile("lator-add-medication-gui-")
+  app <- lator_gui(
+    path = root, passphrase = "add medication test passphrase",
+    launch.browser = NULL
+  )
+  server <- app[["serverFuncSource"]]()
+
+  shiny::testServer(server, {
+    session$flushReact()
+    session$setInputs(liberator_workbench_event = list(
+      action = "new_patient", patient_id = "P-TREATMENT-GUI",
+      study_id = "TEST", label = "Treatment profile", nonce = 1
+    ))
+    session$flushReact()
+    initial_prompt <- state$endpoint_prompt
+    session$setInputs(liberator_workbench_event = list(
+      action = "add_medication", drug = "phenytoin",
+      therapeutic_class = "", configure_endpoint = TRUE, nonce = 2
+    ))
+    session$flushReact()
+
+    expect_equal(state$drug_id, "phenytoin")
+    expect_null(state$endpoint_id)
+    expect_gt(state$endpoint_prompt, initial_prompt)
+    expect_length(workbench_payload()$events, 0L)
+    medication <- workbench_payload()$medications[[1L]]
+    expect_equal(medication$drug, "phenytoin")
+    expect_equal(medication$therapeutic_class, "antiseizure")
+    suggested <- Filter(
+      function(template) isTRUE(template$recommended),
+      workbench_payload()$endpointTemplates
+    )
+    expect_length(suggested, 1L)
+    expect_equal(suggested[[1L]]$id, "template-aed-range")
+    defaults <- stats::setNames(
+      lapply(suggested[[1L]]$fields, `[[`, "default"),
+      vapply(suggested[[1L]]$fields, `[[`, character(1), "name")
+    )
+    expect_equal(defaults$lower, 10)
+    expect_equal(defaults$upper, 20)
+
+    prompt_after_phenytoin <- state$endpoint_prompt
+    session$setInputs(liberator_workbench_event = list(
+      action = "add_medication", drug = "warfarin",
+      therapeutic_class = "", configure_endpoint = FALSE, nonce = 3
+    ))
+    session$flushReact()
+    expect_equal(state$drug_id, "warfarin")
+    expect_equal(state$endpoint_prompt, prompt_after_phenytoin)
+    patient <- lator_patient_get(state$workspace, "P-TREATMENT-GUI")
+    expect_setequal(
+      lator_patient_medications(patient)$key,
+      c("phenytoin", "warfarin")
+    )
+  })
+})
+
+test_that("endpoint template versions can be assigned independently to patients", {
+  app <- lator_gui(
+    path = tempfile("lator-patient-endpoints-"),
+    passphrase = "patient endpoint isolation passphrase",
+    launch.browser = NULL
+  )
+  server <- app[["serverFuncSource"]]()
+
+  shiny::testServer(server, {
+    create_patient_endpoint <- function(patient_id, nonce) {
+      session$setInputs(liberator_workbench_event = list(
+        action = "new_patient", patient_id = patient_id,
+        study_id = "TEST", label = patient_id, nonce = nonce
+      ))
+      session$flushReact()
+      session$setInputs(liberator_workbench_event = list(
+        action = "add_medication", drug = "lamotrigine",
+        therapeutic_class = "antiseizure",
+        configure_endpoint = FALSE, nonce = nonce + 1
+      ))
+      session$flushReact()
+      session$setInputs(liberator_workbench_event = list(
+        action = "create_endpoint", template_id = "template-aed-range",
+        values = list(
+          drug = "lamotrigine", lower = "3", upper = "15",
+          unit = "mg/L", source = "Reviewed system template",
+          status = "reviewed", version = "1.0.0"
+        ), nonce = nonce + 2
+      ))
+      session$flushReact()
+      state$endpoint_id
+    }
+
+    first_key <- create_patient_endpoint("PATIENT-ENDPOINT-A", 1)
+    second_key <- create_patient_endpoint("PATIENT-ENDPOINT-B", 10)
+    expect_false(identical(first_key, second_key))
+    expect_match(state$status$text, "Created and selected endpoint")
+    expect_length(.lator_registered_endpoints(state$workspace), 0L)
+  })
+})
+
+test_that("dose and TDM evidence are constrained to patient treatments", {
+  app <- lator_gui(
+    path = tempfile("lator-treatment-evidence-"),
+    passphrase = "treatment evidence constraint passphrase",
+    launch.browser = NULL
+  )
+  server <- app[["serverFuncSource"]]()
+
+  shiny::testServer(server, {
+    session$flushReact()
+    session$setInputs(liberator_workbench_event = list(
+      action = "new_patient", patient_id = "P-EVIDENCE",
+      study_id = "TEST", label = "Evidence", nonce = 1
+    ))
+    session$flushReact()
+    session$setInputs(liberator_workbench_event = list(
+      action = "add_medication", drug = "carbamazepine",
+      therapeutic_class = "antiseizure",
+      monitoring_analytes = "carbamazepine-10,11-epoxide",
+      configure_endpoint = FALSE, nonce = 2
+    ))
+    session$flushReact()
+
+    session$setInputs(liberator_workbench_event = list(
+      action = "add_event", type = "dose", time = "0",
+      treatment_drug = "phenytoin", name = "phenytoin",
+      value = "100", unit = "mg", nonce = 3
+    ))
+    session$flushReact()
+    expect_length(workbench_payload()$events, 0L)
+    expect_match(state$status$text, "medication already added")
+
+    session$setInputs(liberator_workbench_event = list(
+      action = "add_event", type = "dose", time = "0",
+      treatment_drug = "carbamazepine", name = "carbamazepine",
+      value = "200", unit = "mg", nonce = 4
+    ))
+    session$flushReact()
+    session$setInputs(liberator_workbench_event = list(
+      action = "add_event", type = "concentration", time = "2",
+      treatment_drug = "carbamazepine",
+      name = "carbamazepine-10,11-epoxide",
+      value = "1.4", unit = "mg/L", nonce = 5
+    ))
+    session$flushReact()
+    patient <- lator_patient_get(state$workspace, "P-EVIDENCE")
+    expect_length(patient$events, 2L)
+    expect_equal(patient$events[[2L]]$name, "carbamazepine-10,11-epoxide")
+    expect_equal(patient$events[[2L]]$metadata$drug, "carbamazepine")
+  })
+})
+
+test_that("patient deletion is available through the hosted workbench", {
+  app <- lator_gui(
+    path = tempfile("lator-delete-gui-"),
+    passphrase = "patient deletion GUI passphrase",
+    launch.browser = NULL
+  )
+  server <- app[["serverFuncSource"]]()
+
+  shiny::testServer(server, {
+    session$flushReact()
+    session$setInputs(liberator_workbench_event = list(
+      action = "new_patient", patient_id = "P-DELETE-GUI",
+      study_id = "TEST", label = "Delete me", nonce = 1
+    ))
+    session$flushReact()
+    session$setInputs(liberator_workbench_event = list(
+      action = "delete_patient", confirmation = "YES", nonce = 2
+    ))
+    session$flushReact()
+    expect_null(state$patient_id)
+    expect_false(
+      "P-DELETE-GUI" %in% lator_patient_list(state$workspace)$patient_id
+    )
+    expect_match(state$status$text, "deleted", ignore.case = TRUE)
   })
 })
 

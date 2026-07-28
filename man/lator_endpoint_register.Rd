@@ -14,5 +14,6 @@ lator_endpoint_register(workspace, endpoint, actor = "local-session")
 \item{actor}{Audit actor.}
 }
 \description{
-Register an encrypted endpoint definition
+Registered endpoint versions are immutable. Re-registering the same
+`id@version` is rejected; modifications must use a new version.
 }

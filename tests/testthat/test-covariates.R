@@ -31,3 +31,72 @@ test_that("corrections supersede evidence rather than mutating it", {
   expect_equal(length(patient$events), 2L)
   expect_equal(lator_covariate_at(patient, "WT", 0)$value, 65)
 })
+
+test_that("declared treatment-interaction covariates use active medication profiles", {
+  patient <- lator_test_patient()
+  patient <- lator_patient_medication_add(
+    patient, "warfarin", "vitamin-k-antagonist"
+  )
+  model <- LibeRation::nm_model(
+    INPUT = c("ID", "TIME", "EVID", "AMT", "CMT", "DV", "MDV",
+              "COMED_WARFARIN"),
+    ADVAN = 1,
+    PRED = paste0(
+      "CL=THETA(1)*(1+0.2*COMED_WARFARIN)*exp(ETA(1));",
+      "V=THETA(2);S1=V"
+    ),
+    ERROR = "Y=F+ERR(1)",
+    THETAS = data.frame(THETA = 1:2, Value = c(3, 30)),
+    OMEGAS = data.frame(OMEGA = 1, Value = 0.2),
+    SIGMAS = data.frame(SIGMA = 1, Value = 0.4),
+    COVARIATES = "COMED_WARFARIN"
+  )
+  prepared <- .lator_patient_dataset(patient, model, "Drug A")
+  expect_true(all(prepared$data$COMED_WARFARIN == 1))
+  expect_equal(
+    prepared$evidence$COMED_WARFARIN$source,
+    "patient-treatment-profile"
+  )
+})
+
+test_that("effective-dated interaction evidence overrides treatment fallback", {
+  patient <- lator_test_patient()
+  patient <- lator_patient_medication_add(
+    patient, "warfarin", "vitamin-k-antagonist"
+  )
+  patient <- lator_patient_add_event(
+    patient, "covariate", 0, "COMED_WARFARIN", 0
+  )
+  patient <- lator_patient_add_event(
+    patient, "covariate", 10, "COMED_WARFARIN", 1
+  )
+  model <- LibeRation::nm_model(
+    INPUT = c("ID", "TIME", "EVID", "AMT", "CMT", "DV", "MDV",
+              "COMED_WARFARIN"),
+    ADVAN = 1,
+    PRED = paste0(
+      "CL=THETA(1)*(1+0.2*COMED_WARFARIN)*exp(ETA(1));",
+      "V=THETA(2);S1=V"
+    ),
+    ERROR = "Y=F+ERR(1)",
+    THETAS = data.frame(THETA = 1:2, Value = c(3, 30)),
+    OMEGAS = data.frame(OMEGA = 1, Value = 0.2),
+    SIGMAS = data.frame(SIGMA = 1, Value = 0.4),
+    COVARIATES = "COMED_WARFARIN"
+  )
+  prepared <- .lator_patient_dataset(patient, model, "Drug A")
+  expect_true(all(
+    prepared$data$COMED_WARFARIN[prepared$data$TIME < 10] == 0
+  ))
+  expect_true(all(
+    prepared$data$COMED_WARFARIN[prepared$data$TIME > 10] == 1
+  ))
+  expect_setequal(
+    prepared$data$COMED_WARFARIN[prepared$data$TIME == 10],
+    c(0, 1)
+  )
+  expect_false(identical(
+    prepared$evidence$COMED_WARFARIN$source,
+    "patient-treatment-profile"
+  ))
+})

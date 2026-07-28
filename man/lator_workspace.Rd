@@ -8,10 +8,10 @@ lator_workspace(path = NULL, passphrase = NULL, key = NULL, create = TRUE)
 }
 \arguments{
 \item{path}{Workspace directory. The default is
-\code{Documents/LibeR-data/liberator-workspace} on Windows and
-\code{~/LibeR-data/liberator-workspace} elsewhere. Existing legacy workspaces
-under \code{LibeR/liberator-workspace} remain discoverable. Set
-\code{LIBERATOR_HOME} to override the default.}
+`Documents/LibeR-data/liberator-workspace` on Windows and
+`~/LibeR-data/liberator-workspace` elsewhere. Existing legacy workspaces
+under `LibeR/liberator-workspace` remain discoverable. Set
+`LIBERATOR_HOME` to override the default.}
 
 \item{passphrase}{Session passphrase of at least 12 characters.}
 

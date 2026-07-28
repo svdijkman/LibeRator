@@ -3,6 +3,10 @@ test_that("models and endpoints are registered only inside encrypted workspace",
   endpoint <- lator_endpoint_aed("Drug A", 1, 4, "mg/L", "teaching source")
   expect_type(lator_model_register(workspace, lator_test_model(), "model-a"), "list")
   expect_s3_class(lator_endpoint_register(workspace, endpoint), "lator_endpoint")
+  expect_error(
+    lator_endpoint_register(workspace, endpoint),
+    "new endpoint version"
+  )
   expect_s3_class(LibeRator:::.lator_model_get(workspace, "model-a")$model, "nm_model")
   expect_s3_class(LibeRator:::.lator_endpoint_get(workspace, endpoint$id), "lator_endpoint")
 })

@@ -1,8 +1,15 @@
 # Security and clinical-hardening boundary
 
-## Current research safeguards
+## Current release safeguards
 
-LibeRator 0.1.0 stores pseudonymous patient timelines, model registrations, endpoints, catalogues, and the audit chain in authenticated encryption envelopes. Argon2id is the preferred passphrase KDF; a Windows/libsodium build that cannot allocate Argon2 memory uses a recorded scrypt fallback. Managed deployments can supply a 32-byte key. Keys and passphrases are never written to the workspace.
+LibeRator follows one product path designed toward eventual clinical use. The
+**Research** label on the current release communicates that clinical validation
+is incomplete; it is not a separate edition. The package stores pseudonymous
+patient timelines, model registrations, endpoints, catalogues, model-selection
+decisions, and the audit chain in authenticated encryption envelopes. Argon2id
+is the preferred passphrase KDF; a Windows/libsodium build that cannot allocate
+Argon2 memory uses a recorded scrypt fallback. Managed deployments can supply a
+32-byte key. Keys and passphrases are never written to the workspace.
 
 The schema deliberately omits direct identifiers. Queue jobs contain only a serializable model and model-ready pseudonymous data, never an unlocked workspace or key. All registered endpoints and models retain hashes, provenance, version, and qualification metadata. Evidence events are append-only in normal APIs; corrections point to a superseded event. Patient saves use optimistic revision checks and encrypted audit entries form a hash chain.
 
@@ -15,7 +22,7 @@ The Shiny server binds to loopback by default. A non-loopback bind requires an e
 - Filesystem encryption cannot replace host hardening, endpoint detection, patching, malware protection, encrypted backups, or physical controls.
 - Pseudonyms can still be personal data when another system can relink them.
 - Local audit files do not provide independent write-once retention or external timestamping.
-- The research GUI has no institutional identity provider, role-based authorization, session expiry, dual approval, or break-glass workflow.
+- The current GUI has no institutional identity provider, role-based authorization, session expiry, dual approval, or break-glass workflow.
 - The package does not certify the source model, endpoint, assay, units, covariate policy, numerical result, or dose feasibility for a clinical population.
 
 ## Required clinical programme
