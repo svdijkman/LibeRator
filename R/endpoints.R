@@ -532,6 +532,18 @@ lator_endpoint_warfarin <- function(
   sum(diff(time) * (value[-length(value)] + value[-1L]) / 2)
 }
 
+.lator_nca_auc <- function(time, value) {
+  profile <- data.frame(ID = 1L, TIME = as.numeric(time), CONC = as.numeric(value))
+  result <- tryCatch(
+    LibeRation::nm_nca(
+      profile, time = "TIME", concentration = "CONC", id = "ID",
+      method = "lin_up_log_down", engine = "native"
+    )$results$AUCLAST[[1L]],
+    error = function(e) NA_real_
+  )
+  if (is.finite(result)) result else .lator_trapz(time, value)
+}
+
 .lator_time_above <- function(time, concentration, threshold) {
   keep <- is.finite(time) & is.finite(concentration) & is.finite(threshold)
   time <- time[keep]; concentration <- concentration[keep]; threshold <- threshold[keep]
@@ -880,7 +892,7 @@ lator_endpoint_evaluate <- function(endpoint, predictions, patient = NULL, inter
     if (endpoint$kind == "therapeutic_range") {
       metric <- if (identical(endpoint$metric, "trough")) min(value, na.rm = TRUE) else {
         duration <- diff(range(time))
-        if (duration > 0) .lator_trapz(time, value) / duration else utils::tail(value, 1L)
+        if (duration > 0) .lator_nca_auc(time, value) / duration else utils::tail(value, 1L)
       }
       lower <- endpoint$rules$lower; upper <- endpoint$rules$upper; target <- endpoint$rules$target
       return(c(metric = metric, attained = metric >= lower && metric <= upper,
@@ -892,13 +904,13 @@ lator_endpoint_evaluate <- function(endpoint, predictions, patient = NULL, inter
                score = abs(metric - mean(c(lower, upper))) / (upper - lower)))
     }
     if (endpoint$kind == "auc_range") {
-      metric <- .lator_trapz(time, value) * as.numeric(endpoint$rules$scale %||% 1)
+      metric <- .lator_nca_auc(time, value) * as.numeric(endpoint$rules$scale %||% 1)
       lower <- endpoint$rules$lower; upper <- endpoint$rules$upper
       return(c(metric = metric, attained = metric >= lower && metric <= upper,
                score = abs(metric - mean(c(lower, upper))) / (upper - lower)))
     }
     if (endpoint$kind == "auc_mic_range") {
-      auc <- .lator_trapz(time, value)
+      auc <- .lator_nca_auc(time, value)
       mic <- .lator_endpoint_covariate(patient, endpoint$rules$mic_variable, time)
       metric <- auc / mic
       lower <- endpoint$rules$lower; upper <- endpoint$rules$upper
@@ -912,7 +924,7 @@ lator_endpoint_evaluate <- function(endpoint, predictions, patient = NULL, inter
     if (endpoint$kind == "peak_mic_safety") {
       mic <- .lator_endpoint_covariate(patient, endpoint$rules$mic_variable, time)
       efficacy <- if (identical(endpoint$rules$efficacy_metric, "AUC/MIC")) {
-        .lator_trapz(time, value) / mic
+        .lator_nca_auc(time, value) / mic
       } else max(value, na.rm = TRUE) / mic
       trough <- min(value, na.rm = TRUE)
       lower <- endpoint$rules$efficacy_lower

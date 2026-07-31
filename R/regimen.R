@@ -156,22 +156,37 @@ lator_regimen_candidates <- function(amounts, intervals, routes = "oral",
     drop = FALSE
   ]
   if (!nrow(predictions)) return(data.frame())
+  durations <- vapply(split(predictions$.time, predictions$.sim), function(x) diff(range(x)), numeric(1))
+  duration <- stats::median(durations[is.finite(durations) & durations > 0])
+  if (!is.finite(duration)) duration <- NA_real_
+  nca_input <- data.frame(
+    SIM = predictions$.sim, TIME = predictions$.time,
+    CONC = predictions$.value
+  )
+  nca <- tryCatch(
+    LibeRation::nm_nca(
+      nca_input, time = "TIME", concentration = "CONC", id = "SIM",
+      tau = duration, method = "lin_up_log_down", engine = "native"
+    )$results,
+    error = function(e) NULL
+  )
+  if (!is.null(nca) && nrow(nca)) {
+    return(data.frame(
+      SIM = as.integer(nca$SIM), mean_css = as.numeric(nca$CAVG),
+      trough = as.numeric(nca$CMIN), peak = as.numeric(nca$CMAX),
+      fluctuation_percent = as.numeric(nca$FLUCTUATION_PERCENT),
+      stringsAsFactors = FALSE
+    ))
+  }
+  # Retain a defensive R fallback for profiles that cannot meet NCA input
+  # requirements (for example a single simulated time point).
   rows <- lapply(split(predictions, predictions$.sim), function(item) {
     item <- item[order(item$.time), , drop = FALSE]
-    duration <- diff(range(item$.time))
-    mean_css <- if (is.finite(duration) && duration > 0) {
-      .lator_trapz(item$.time, item$.value) / duration
-    } else utils::tail(item$.value, 1L)
-    trough <- min(item$.value)
-    peak <- max(item$.value)
-    data.frame(
-      SIM = item$.sim[[1L]], mean_css = mean_css, trough = trough,
-      peak = peak,
-      fluctuation_percent = if (
-        is.finite(mean_css) && abs(mean_css) > sqrt(.Machine$double.eps)
-      ) 100 * (peak - trough) / abs(mean_css) else NA_real_,
-      stringsAsFactors = FALSE
-    )
+    span <- diff(range(item$.time))
+    mean_css <- if (is.finite(span) && span > 0) .lator_trapz(item$.time, item$.value) / span else utils::tail(item$.value, 1L)
+    peak <- max(item$.value); trough <- min(item$.value)
+    data.frame(SIM = item$.sim[[1L]], mean_css = mean_css, trough = trough,
+               peak = peak, fluctuation_percent = if (abs(mean_css) > sqrt(.Machine$double.eps)) 100 * (peak - trough) / abs(mean_css) else NA_real_)
   })
   do.call(rbind, rows)
 }

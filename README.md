@@ -40,6 +40,9 @@ exact [ecosystem compatibility set](../docs/INSTALL.md) and review
   review-date gates. Ambiguous or unsuitable cases are surfaced for review
   instead of silently choosing a model.
 - Batched posterior-uncertainty simulations that rank feasible dose/interval grids by target attainment and endpoint distance.
+- Shared native LibeRation NCA summaries for AUC, average steady-state
+  concentration, peak, trough, and fluctuation across individual and candidate
+  regimen trajectories.
 - An explicit user selection step that turns one or more simulated candidates
   into auditable, vertically stacked future-prediction artifacts with posterior
   medians, 90% intervals, target ranges, linked endpoint evaluations, and a

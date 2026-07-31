@@ -543,7 +543,7 @@
   value <- value[ordering]
   duration <- diff(range(time))
   mean_css <- if (is.finite(duration) && duration > 0) {
-    .lator_trapz(time, value) / duration
+    .lator_nca_auc(time, value) / duration
   } else value[[length(value)]]
   trough <- min(value)
   peak <- max(value)

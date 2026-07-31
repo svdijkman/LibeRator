@@ -1,3 +1,9 @@
+# LibeRator 0.3.5
+
+- Uses the shared LibeRation native NCA backend for individual and candidate
+  regimen AUC, average steady-state concentration, peak, trough, and fluctuation
+  summaries while retaining a defensive fallback for non-evaluable profiles.
+
 # LibeRator 0.3.4
 
 - Represents multi-endpoint utility weights as explicit named lists, preserving

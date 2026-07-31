@@ -440,3 +440,14 @@ test_that("Rivas steady-state individualisation agrees with AEDapt reference", {
     "between-subject ETA variability only"
   )
 })
+test_that("candidate cycle exposure uses the shared native NCA backend", {
+  predictions <- data.frame(
+    TIME = rep(0:4, 2),
+    IPRED = c(0, 5, 4, 3, 2, 0, 4, 3, 2, 1),
+    SIM = rep(1:2, each = 5)
+  )
+  result <- .lator_prediction_cycle_statistics(predictions)
+  expect_equal(nrow(result), 2L)
+  expect_equal(result$peak, c(5, 4))
+  expect_true(all(is.finite(result$mean_css)))
+})
