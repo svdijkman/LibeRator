@@ -32,6 +32,63 @@ test_that("corrections supersede evidence rather than mutating it", {
   expect_equal(lator_covariate_at(patient, "WT", 0)$value, 65)
 })
 
+test_that("clinician corrections retain immutable lineage and provenance", {
+  patient <- lator_patient_new("P-CORRECT")
+  patient <- lator_patient_add_event(
+    patient, "covariate", 24, "WT", 60, "kg",
+    source = "clinic form"
+  )
+  original <- patient$events[[1L]]
+  patient <- lator_patient_correct_event(
+    patient, original$event_id,
+    reason = "Transcription error confirmed against source record",
+    replacement = list(value = 66),
+    actor = "clinician-17"
+  )
+
+  expect_length(patient$events, 2L)
+  expect_equal(patient$events[[1L]]$value, 60)
+  active <- .lator_active_events(patient, types = "covariate")
+  expect_length(active, 1L)
+  expect_equal(active[[1L]]$value, 66)
+  expect_identical(active[[1L]]$supersedes, original$event_id)
+  expect_identical(
+    active[[1L]]$metadata$correction$root_event_id,
+    original$event_id
+  )
+  expect_identical(
+    active[[1L]]$metadata$correction$actor, "clinician-17"
+  )
+  expect_true(nzchar(
+    active[[1L]]$metadata$correction$original_event_hash
+  ))
+  expect_error(
+    lator_patient_correct_event(
+      patient, original$event_id, "Attempt to rewrite history",
+      replacement = list(value = 70)
+    ),
+    "Only active evidence"
+  )
+
+  replacement_id <- active[[1L]]$event_id
+  patient <- lator_patient_correct_event(
+    patient, replacement_id,
+    reason = "Measurement belonged to another patient",
+    entered_in_error = TRUE,
+    actor = "clinician-17"
+  )
+  expect_length(patient$events, 3L)
+  expect_length(.lator_active_events(patient, types = "covariate"), 0L)
+  tombstone <- .lator_active_events(patient, types = "correction")[[1L]]
+  expect_identical(
+    tombstone$metadata$correction$root_event_id,
+    original$event_id
+  )
+  expect_identical(
+    tombstone$metadata$correction$action, "entered_in_error"
+  )
+})
+
 test_that("declared treatment-interaction covariates use active medication profiles", {
   patient <- lator_test_patient()
   patient <- lator_patient_medication_add(

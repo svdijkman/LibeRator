@@ -81,6 +81,83 @@ test_that("empty-workspace GUI refreshes after every successive evidence write",
   })
 })
 
+test_that("GUI appends clinician evidence corrections and exposes full lineage", {
+  root <- tempfile("lator-correction-gui-")
+  app <- lator_gui(
+    path = root, passphrase = "correction gui test passphrase",
+    launch.browser = NULL
+  )
+  server <- app[["serverFuncSource"]]()
+
+  shiny::testServer(server, {
+    session$flushReact()
+    session$setInputs(liberator_workbench_event = list(
+      action = "new_patient", patient_id = "P-CORRECTION-001",
+      study_id = "TEST", label = "Correction test", nonce = 1
+    ))
+    session$flushReact()
+    session$setInputs(liberator_workbench_event = list(
+      action = "add_medication", drug = "Drug A",
+      therapeutic_class = "test", configure_endpoint = FALSE, nonce = 2
+    ))
+    session$flushReact()
+    session$setInputs(liberator_workbench_event = list(
+      action = "add_event", type = "dose", time = "0",
+      name = "Drug A", treatment_drug = "Drug A",
+      value = "100", unit = "mg", route = "oral", rate = "0",
+      dosing_interval = "12", steady_state = FALSE, nonce = 3
+    ))
+    session$flushReact()
+    original_id <- workbench_payload()$events[[1L]]$id
+
+    session$setInputs(liberator_workbench_event = list(
+      action = "correct_event", event_id = original_id,
+      reason = "Dose transcribed incorrectly", actor = "clinician-17",
+      entered_in_error = FALSE, type = "dose", time = "0",
+      name = "Drug A", treatment_drug = "Drug A",
+      value = "150", unit = "mg", source = "clinic form",
+      route = "oral", rate = "0", dosing_interval = "12",
+      steady_state = FALSE, nonce = 4
+    ))
+    session$flushReact()
+
+    payload <- workbench_payload()
+    expect_length(payload$eventLedger, 2L)
+    expect_length(payload$events, 1L)
+    expect_equal(payload$events[[1L]]$value, 150)
+    expect_identical(payload$events[[1L]]$status, "corrected")
+    original_row <- Filter(function(row) {
+      identical(row$id, original_id)
+    }, payload$eventLedger)[[1L]]
+    expect_identical(original_row$status, "superseded")
+    expect_false(original_row$amendable)
+    expect_match(state$status$text, "original retained")
+    expect_true(any(vapply(
+      lator_workspace_audit(state$workspace),
+      function(item) identical(item$action, "evidence_corrected"),
+      logical(1)
+    )))
+
+    replacement_id <- payload$events[[1L]]$id
+    session$setInputs(liberator_workbench_event = list(
+      action = "correct_event", event_id = replacement_id,
+      reason = "Dose belonged to another patient",
+      actor = "clinician-17", entered_in_error = TRUE, nonce = 5
+    ))
+    session$flushReact()
+    payload <- workbench_payload()
+    expect_length(payload$eventLedger, 3L)
+    expect_false(any(vapply(
+      payload$events, function(row) identical(row$type, "dose"), logical(1)
+    )))
+    expect_true(any(vapply(
+      payload$eventLedger,
+      function(row) identical(row$status, "entered_in_error"),
+      logical(1)
+    )))
+  })
+})
+
 test_that("endpoint-library choice creates, registers, and selects an endpoint", {
   root <- tempfile("lator-endpoint-gui-")
   app <- lator_gui(
@@ -158,6 +235,115 @@ test_that("endpoint-library choice creates, registers, and selects an endpoint",
       original_key
     )
     expect_match(state$status$text, "revised endpoint")
+  })
+})
+
+test_that("GUI creates and versions patient-specific multi-endpoint objectives", {
+  root <- tempfile("lator-multi-endpoint-gui-")
+  app <- lator_gui(
+    path = root, passphrase = "multi endpoint gui test passphrase",
+    launch.browser = NULL
+  )
+  server <- app[["serverFuncSource"]]()
+
+  shiny::testServer(server, {
+    session$flushReact()
+    session$setInputs(liberator_workbench_event = list(
+      action = "new_patient", patient_id = "P-MULTI-ENDPOINT-001",
+      study_id = "TEST", label = "Multi endpoint", nonce = 1
+    ))
+    session$flushReact()
+    session$setInputs(liberator_workbench_event = list(
+      action = "add_medication", drug = "Drug A",
+      therapeutic_class = "antiseizure",
+      configure_endpoint = FALSE, nonce = 2
+    ))
+    session$flushReact()
+    session$setInputs(liberator_workbench_event = list(
+      action = "create_endpoint",
+      template_id = "template-aed-range",
+      values = list(
+        drug = "Drug A", unit = "mg/L", lower = "2", upper = "8",
+        source = "Efficacy protocol", status = "reviewed",
+        version = "1.0.0"
+      ),
+      nonce = 3
+    ))
+    session$flushReact()
+    efficacy_key <- state$endpoint_id
+
+    session$setInputs(liberator_workbench_event = list(
+      action = "create_endpoint",
+      template_id = "template-tacrolimus",
+      values = list(
+        drug = "Drug A", unit = "mg/L", lower = "1", upper = "10",
+        source = "Safety protocol", status = "reviewed",
+        version = "1.0.0"
+      ),
+      nonce = 4
+    ))
+    session$flushReact()
+    safety_key <- state$endpoint_id
+    expect_true(all(
+      c(efficacy_key, safety_key) %in% names(state$patient_endpoints)
+    ))
+
+    components <- list(
+      list(
+        endpoint_key = efficacy_key, role = "primary", weight = 2,
+        hard_constraint = FALSE, minimum_attainment = 0.9
+      ),
+      list(
+        endpoint_key = safety_key, role = "safety", weight = 1,
+        hard_constraint = TRUE, minimum_attainment = 0.8
+      )
+    )
+    session$setInputs(liberator_workbench_event = list(
+      action = "create_endpoint_set",
+      name = "Drug A benefit-risk objective",
+      source = "Combined institutional protocol",
+      status = "reviewed", version = "1.0.0",
+      components = components, nonce = 5
+    ))
+    session$flushReact()
+
+    objective_key <- state$endpoint_id
+    objective <- state$patient_endpoints[[objective_key]]
+    expect_identical(objective$kind, "multi_endpoint")
+    expect_length(objective$rules$components, 2L)
+    payload <- workbench_payload()
+    selected <- Filter(function(item) {
+      identical(item$id, objective_key)
+    }, payload$endpoints)[[1L]]
+    expect_true(selected$isSet)
+    expect_length(selected$components, 2L)
+    expect_identical(payload$endpointEdit$kind, "multi_endpoint")
+    expect_equal(payload$endpointEdit$version, "1.0.1")
+
+    session$setInputs(liberator_workbench_event = list(
+      action = "revise_endpoint_set",
+      original_key = objective_key,
+      name = "Drug A benefit-risk objective",
+      source = "Revised combined institutional protocol",
+      status = "reviewed", version = "1.0.1",
+      components = components, nonce = 6
+    ))
+    session$flushReact()
+    revised <- state$patient_endpoints[[state$endpoint_id]]
+    expect_identical(revised$kind, "multi_endpoint")
+    expect_equal(revised$version, "1.0.1")
+    expect_identical(
+      revised$metadata$supersedes_endpoint_key, objective_key
+    )
+    patient <- lator_patient_get(
+      state$workspace, "P-MULTI-ENDPOINT-001"
+    )
+    expect_length(
+      lator_patient_endpoint_get(
+        patient, "Drug A"
+      )$endpoint_history,
+      4L
+    )
   })
 })
 
@@ -426,8 +612,17 @@ test_that("hosted teaching sessions seed a usable synthetic case", {
     session$flushReact()
     expect_equal(state$patient_id, "TEACH-AED-001")
     expect_true("teaching-aed" %in% names(state$models))
-    expect_true("aed-example-aed" %in% names(state$endpoints))
-    expect_length(workbench_payload()$events, 9L)
+    expect_true(all(c(
+      "aed-example-aed", "teaching-aed-trough-safety",
+      "teaching-aed-benefit-risk"
+    ) %in% names(state$endpoints)))
+    payload <- workbench_payload()
+    expect_length(payload$events, 9L)
+    expect_identical(payload$selectedEndpoint, "teaching-aed-benefit-risk")
+    expect_identical(payload$endpointEdit$kind, "multi_endpoint")
+    expect_equal(payload$regimenDefaults$amounts,
+                 c(150, 225, 300, 375, 450))
+    expect_equal(payload$regimenDefaults$intervals, c(12, 24))
     expect_match(state$status$text, "synthetic teaching patient", ignore.case = TRUE)
   })
 })

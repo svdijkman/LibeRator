@@ -2,7 +2,7 @@
   "selected", "multiple_suitable_models", "no_suitable_model"
 )
 
-.lator_liberary_api <- function(name, minimum_version = "0.7.9") {
+.lator_liberary_api <- function(name, minimum_version = "0.7.10") {
   if (!requireNamespace("LibeRary", quietly = TRUE)) {
     .lator_stop("Install LibeRary ", minimum_version, " or later.")
   }
@@ -126,7 +126,15 @@ lator_patient_context <- function(patient, endpoint, cutoff = Inf,
       as.character(event$metadata$regimen %||% "")
     }, character(1))),
     endpoint = list(
-      id = endpoint$id, kind = endpoint$kind, version = endpoint$version
+      id = endpoint$id, kind = endpoint$kind, version = endpoint$version,
+      components = if (identical(endpoint$kind, "multi_endpoint")) {
+        lapply(endpoint$rules$components, function(component) list(
+          id = component$endpoint$id,
+          kind = component$endpoint$kind,
+          version = component$endpoint$version,
+          role = component$role
+        ))
+      } else list()
     ),
     covariates = .lator_latest_covariates(patient, cutoff, at),
     assays = list(
@@ -258,8 +266,14 @@ lator_model_candidates_from_liberary <- function(
   endpoint_ids <- .lator_normalize_terms(scope$endpoint_ids)
   endpoint_kinds <- .lator_normalize_terms(scope$endpoint_kinds)
   if (length(endpoint_ids) || length(endpoint_kinds)) {
-    if (!tolower(endpoint$id) %in% endpoint_ids &&
-        !tolower(endpoint$kind) %in% endpoint_kinds) {
+    endpoint_definitions <- if (identical(endpoint$kind, "multi_endpoint")) {
+      lapply(endpoint$rules$components, `[[`, "endpoint")
+    } else list(endpoint)
+    covered <- vapply(endpoint_definitions, function(definition) {
+      tolower(definition$id) %in% endpoint_ids ||
+        tolower(definition$kind) %in% endpoint_kinds
+    }, logical(1))
+    if (!all(covered)) {
       blockers <- c(blockers, "endpoint_outside_qualification")
     }
   } else {

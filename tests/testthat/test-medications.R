@@ -62,6 +62,33 @@ test_that("medications can be added before any dose evidence exists", {
   expect_equal(medications$last_dose_time, 12)
 })
 
+test_that("population-model preferences persist per patient medication", {
+  patient <- lator_patient_medication_add(
+    lator_patient_new("P-MODEL-PREFERENCE"), "lamotrigine", "antiseizure"
+  )
+  patient <- .lator_patient_model_set(
+    patient, "lamotrigine", "rivas-lamotrigine", "model-definition-hash"
+  )
+  expect_equal(
+    lator_patient_medications(patient)$model_id, "rivas-lamotrigine"
+  )
+  expect_equal(
+    .lator_patient_model_get(patient, "lamotrigine")$model_hash,
+    "model-definition-hash"
+  )
+
+  endpoint <- lator_endpoint_aed(
+    "lamotrigine", 3, 15, "mg/L", "Reviewed system template"
+  )
+  patient <- lator_patient_endpoint_set(
+    patient, "lamotrigine", "aed-lamotrigine@1.0.0", endpoint
+  )
+  expect_equal(
+    .lator_patient_model_get(patient, "lamotrigine")$model_id,
+    "rivas-lamotrigine"
+  )
+})
+
 test_that("endpoint snapshots belong to patient-medication assignments", {
   endpoint <- lator_endpoint_aed(
     "lamotrigine", 3, 15, "mg/L", "Reviewed system template"

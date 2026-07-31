@@ -1,8 +1,10 @@
 .lator_endpoint_kinds <- c(
   "therapeutic_range", "pre_event_target", "fraction_time_above_threshold",
   "auc_range", "trough_range", "auc_mic_range", "peak_mic_safety",
-  "timed_thresholds", "time_in_range", "custom"
+  "timed_thresholds", "time_in_range", "multi_endpoint", "custom"
 )
+
+.lator_endpoint_component_roles <- c("primary", "secondary", "safety")
 
 #' Define a versioned therapeutic endpoint
 #'
@@ -52,6 +54,76 @@ lator_endpoint_validate <- function(endpoint) {
   if (!inherits(endpoint, "lator_endpoint") || !identical(endpoint$schema, "liberator.endpoint") ||
       as.integer(endpoint$schema_version) != 1L) .lator_stop("Invalid LibeRator endpoint.")
   if (!is.list(endpoint$rules) || !is.list(endpoint$metadata)) .lator_stop("Endpoint rules and metadata must be lists.")
+  if (endpoint$kind == "multi_endpoint") {
+    components <- endpoint$rules$components
+    if (!is.list(components) || length(components) < 2L) {
+      .lator_stop("A multi-endpoint objective requires at least two components.")
+    }
+    components <- lapply(components, function(component) {
+      if (!is.list(component) || is.null(component$endpoint)) {
+        .lator_stop("Every multi-endpoint component requires an endpoint definition.")
+      }
+      nested <- lator_endpoint_validate(component$endpoint)
+      if (identical(nested$kind, "multi_endpoint")) {
+        .lator_stop("Nested multi-endpoint objectives are not supported.")
+      }
+      role <- match.arg(
+        as.character(component$role %||% "secondary"),
+        .lator_endpoint_component_roles
+      )
+      weight <- .lator_number(
+        component$weight %||% 1, "component$weight", positive = TRUE
+      )
+      hard <- isTRUE(component$hard_constraint)
+      minimum <- if (hard) {
+        .lator_number(
+          component$minimum_attainment %||% 0.9,
+          "component$minimum_attainment"
+        )
+      } else NA_real_
+      if (hard && (minimum < 0 || minimum > 1)) {
+        .lator_stop(
+          "Hard-constraint minimum attainment must be between zero and one."
+        )
+      }
+      list(
+        component_id = as.character(
+          component$component_id %||%
+            paste(nested$id, nested$version, sep = "@")
+        ),
+        endpoint = nested, role = role, weight = weight,
+        hard_constraint = hard, minimum_attainment = minimum
+      )
+    })
+    ids <- vapply(components, `[[`, character(1), "component_id")
+    if (any(!nzchar(ids)) || anyDuplicated(ids)) {
+      .lator_stop("Multi-endpoint component identifiers must be unique.")
+    }
+    primary <- vapply(
+      components, function(component) identical(component$role, "primary"),
+      logical(1)
+    )
+    if (sum(primary) != 1L) {
+      .lator_stop("A multi-endpoint objective requires exactly one primary component.")
+    }
+    drugs <- vapply(
+      components, function(component) .lator_drug_key(component$endpoint$drug),
+      character(1)
+    )
+    if (length(unique(drugs)) != 1L ||
+        !identical(unique(drugs), .lator_drug_key(endpoint$drug))) {
+      .lator_stop(
+        "All multi-endpoint components must match the objective's medication."
+      )
+    }
+    endpoint$rules$components <- components
+    endpoint$rules$decision_policy <- as.character(
+      endpoint$rules$decision_policy %||% "constrained_utility"
+    )
+    if (!endpoint$rules$decision_policy %in% "constrained_utility") {
+      .lator_stop("Unknown multi-endpoint decision policy.")
+    }
+  }
   if (endpoint$kind %in% c("therapeutic_range", "auc_range", "trough_range")) {
     lower <- .lator_number(endpoint$rules$lower, "rules$lower")
     upper <- .lator_number(endpoint$rules$upper, "rules$upper")
@@ -122,11 +194,96 @@ lator_endpoint_validate <- function(endpoint) {
   endpoint
 }
 
+#' Define one component of a multi-endpoint objective
+#'
+#' @param endpoint A versioned [lator_endpoint()].
+#' @param role `"primary"`, `"secondary"`, or `"safety"`.
+#' @param weight Positive utility weight. Weights are normalized within the
+#'   endpoint set, so only their relative values matter.
+#' @param hard_constraint Whether candidate regimens must satisfy a minimum
+#'   posterior target-attainment probability for this component.
+#' @param minimum_attainment Required probability when `hard_constraint` is
+#'   `TRUE`.
+#' @param component_id Optional stable component identifier.
+#' @return A serializable endpoint-component specification.
+#' @export
+lator_endpoint_component <- function(
+    endpoint, role = c("primary", "secondary", "safety"), weight = 1,
+    hard_constraint = FALSE, minimum_attainment = 0.9,
+    component_id = NULL) {
+  endpoint <- lator_endpoint_validate(endpoint)
+  if (identical(endpoint$kind, "multi_endpoint")) {
+    .lator_stop("Nested multi-endpoint objectives are not supported.")
+  }
+  role <- match.arg(role)
+  weight <- .lator_number(weight, "weight", positive = TRUE)
+  hard_constraint <- isTRUE(hard_constraint)
+  minimum_attainment <- if (hard_constraint) {
+    value <- .lator_number(minimum_attainment, "minimum_attainment")
+    if (value < 0 || value > 1) {
+      .lator_stop("`minimum_attainment` must be between zero and one.")
+    }
+    value
+  } else NA_real_
+  list(
+    component_id = .lator_scalar(
+      component_id %||% paste(endpoint$id, endpoint$version, sep = "@"),
+      "component_id", max_chars = 128L
+    ),
+    endpoint = endpoint, role = role, weight = weight,
+    hard_constraint = hard_constraint,
+    minimum_attainment = minimum_attainment
+  )
+}
+
+#' Combine therapeutic endpoints into a versioned clinical objective
+#'
+#' Candidate regimens are first screened against component-specific posterior
+#' chance constraints. Remaining candidates are ranked by expected normalized
+#' clinical utility and annotated with joint target attainment and Pareto
+#' status. The component weights and thresholds are explicit, versioned
+#' clinical inputs rather than hidden application defaults.
+#'
+#' @param id Stable endpoint-set identifier.
+#' @param name Display name.
+#' @param drug Medication shared by all components.
+#' @param components A list created with [lator_endpoint_component()].
+#' @param source Clinical protocol, literature, or governance provenance.
+#' @param status `"draft"`, `"reviewed"`, or `"qualified"`.
+#' @param version Semantic version string.
+#' @param metadata Additional non-executable metadata.
+#' @return A versioned `lator_endpoint` with kind `"multi_endpoint"`.
+#' @export
+lator_endpoint_set <- function(
+    id, name, drug, components, source,
+    status = c("draft", "reviewed", "qualified"), version = "1.0.0",
+    metadata = list()) {
+  lator_endpoint(
+    id = id, name = name, drug = drug, kind = "multi_endpoint",
+    metric = "joint clinical utility", unit = "utility",
+    rules = list(
+      components = components,
+      decision_policy = "constrained_utility"
+    ),
+    source = source, status = match.arg(status), version = version,
+    metadata = c(
+      list(
+        objective_type = "multi-endpoint",
+        utility_transform = "exp(-normalized_loss)"
+      ),
+      metadata
+    )
+  )
+}
+
 #' @export
 print.lator_endpoint <- function(x, ...) {
   cat("LibeRator endpoint:", x$name, "\n")
   cat("  drug:", x$drug, " kind:", x$kind, " status:", x$status, "\n")
   cat("  version:", x$version, " source:", x$source %||% "", "\n")
+  if (identical(x$kind, "multi_endpoint")) {
+    cat("  components:", length(x$rules$components), "\n")
+  }
   invisible(x)
 }
 
@@ -421,6 +578,272 @@ lator_endpoint_warfarin <- function(
   list(time = time, value = value)
 }
 
+.lator_endpoint_combine_evaluations <- function(endpoint, evaluations) {
+  endpoint <- lator_endpoint_validate(endpoint)
+  components <- endpoint$rules$components
+  if (length(evaluations) != length(components)) {
+    .lator_stop("Multi-endpoint evaluation count does not match its components.")
+  }
+  sim_ids <- lapply(evaluations, function(item) {
+    as.character(item$results$SIM)
+  })
+  common <- Reduce(intersect, sim_ids)
+  if (!length(common)) {
+    .lator_stop("Multi-endpoint components have no common posterior draws.")
+  }
+  component_ids <- vapply(components, `[[`, character(1), "component_id")
+  weights <- vapply(components, `[[`, numeric(1), "weight")
+  weights <- weights / sum(weights)
+  attained <- score <- metric <- matrix(
+    NA_real_, nrow = length(common), ncol = length(components),
+    dimnames = list(common, component_ids)
+  )
+  long <- vector("list", length(components))
+  component_summary <- vector("list", length(components))
+  for (index in seq_along(components)) {
+    evaluation <- evaluations[[index]]
+    rows <- evaluation$results[
+      match(common, as.character(evaluation$results$SIM)), , drop = FALSE
+    ]
+    attained[, index] <- as.numeric(as.logical(rows$attained))
+    score[, index] <- suppressWarnings(as.numeric(rows$score))
+    metric[, index] <- suppressWarnings(as.numeric(rows$metric))
+    utility <- exp(-pmax(score[, index], 0))
+    utility[!is.finite(utility)] <- 0
+    component <- components[[index]]
+    minimum <- component$minimum_attainment
+    probability <- mean(as.logical(attained[, index]), na.rm = TRUE)
+    component_summary[[index]] <- data.frame(
+      component_id = component$component_id,
+      endpoint_id = component$endpoint$id,
+      endpoint_version = component$endpoint$version,
+      name = component$endpoint$name,
+      role = component$role,
+      hard_constraint = component$hard_constraint,
+      minimum_attainment = if (component$hard_constraint) minimum else NA_real_,
+      weight = component$weight,
+      normalized_weight = weights[[index]],
+      attainment_probability = probability,
+      median_metric = stats::median(metric[, index], na.rm = TRUE),
+      expected_utility = mean(utility, na.rm = TRUE),
+      constraint_pass = !component$hard_constraint ||
+        (is.finite(probability) && probability >= minimum),
+      stringsAsFactors = FALSE
+    )
+    long[[index]] <- data.frame(
+      SIM = common, component_id = component$component_id,
+      endpoint_id = component$endpoint$id,
+      role = component$role, metric = metric[, index],
+      attained = as.logical(attained[, index]), score = score[, index],
+      utility = utility, stringsAsFactors = FALSE
+    )
+  }
+  utilities <- exp(-pmax(score, 0))
+  utilities[!is.finite(utilities)] <- 0
+  draw_utility <- drop(utilities %*% weights)
+  joint <- apply(attained, 1L, function(value) all(as.logical(value)))
+  primary <- which(vapply(
+    components, function(component) identical(component$role, "primary"),
+    logical(1)
+  ))
+  hard <- which(vapply(
+    components, function(component) isTRUE(component$hard_constraint),
+    logical(1)
+  ))
+  hard_draw <- if (length(hard)) {
+    apply(attained[, hard, drop = FALSE], 1L, function(value) {
+      all(as.logical(value))
+    })
+  } else rep(TRUE, length(common))
+  component_summary <- do.call(rbind, component_summary)
+  per_draw <- data.frame(
+    SIM = common, metric = draw_utility, attained = joint,
+    score = 1 - draw_utility, utility = draw_utility,
+    primary_attained = as.logical(attained[, primary]),
+    hard_constraints_attained = hard_draw,
+    stringsAsFactors = FALSE
+  )
+  list(
+    endpoint_id = endpoint$id, endpoint_version = endpoint$version,
+    results = per_draw,
+    attainment_probability = mean(joint, na.rm = TRUE),
+    joint_attainment_probability = mean(joint, na.rm = TRUE),
+    primary_attainment_probability = mean(
+      as.logical(attained[, primary]), na.rm = TRUE
+    ),
+    hard_constraints_pass = all(component_summary$constraint_pass),
+    expected_utility = mean(draw_utility, na.rm = TRUE),
+    median_metric = stats::median(draw_utility, na.rm = TRUE),
+    median_score = stats::median(1 - draw_utility, na.rm = TRUE),
+    components = component_summary,
+    component_results = do.call(rbind, long),
+    component_evaluations = stats::setNames(evaluations, component_ids),
+    utility_definition = list(
+      transform = "exp(-normalized_loss)",
+      aggregation = "weighted_arithmetic_mean",
+      normalized_weights = stats::setNames(as.list(weights), component_ids)
+    ),
+    evaluated_at = .lator_now()
+  )
+}
+
+.lator_endpoint_target_text <- function(endpoint) {
+  endpoint <- lator_endpoint_validate(endpoint)
+  unit <- trimws(as.character(endpoint$unit %||% ""))
+  with_unit <- function(text) {
+    paste0(text, if (nzchar(unit)) paste0(" ", unit) else "")
+  }
+  number <- function(value) {
+    format(
+      as.numeric(value), trim = TRUE, scientific = FALSE,
+      digits = 6
+    )
+  }
+  range_text <- function(lower, upper) {
+    with_unit(paste0(number(lower), " \u2013 ", number(upper)))
+  }
+  if (endpoint$kind %in%
+      c("therapeutic_range", "trough_range", "auc_range")) {
+    return(range_text(endpoint$rules$lower, endpoint$rules$upper))
+  }
+  if (endpoint$kind == "auc_mic_range") {
+    result <- range_text(endpoint$rules$lower, endpoint$rules$upper)
+    if (!is.null(endpoint$rules$safety_auc_upper)) {
+      result <- paste0(
+        result, "; absolute AUC \u2264 ",
+        number(endpoint$rules$safety_auc_upper)
+      )
+    }
+    return(result)
+  }
+  if (endpoint$kind == "peak_mic_safety") {
+    result <- paste0(
+      endpoint$rules$efficacy_metric, " \u2265 ",
+      number(endpoint$rules$efficacy_lower)
+    )
+    if (!is.null(endpoint$rules$efficacy_upper)) {
+      result <- paste0(
+        result, " and \u2264 ", number(endpoint$rules$efficacy_upper)
+      )
+    }
+    return(paste0(
+      result, "; trough \u2264 ", number(endpoint$rules$trough_upper)
+    ))
+  }
+  if (endpoint$kind == "fraction_time_above_threshold") {
+    return(paste0(
+      "\u2265 ", number(100 * endpoint$rules$target_fraction),
+      "% of interval above ",
+      number(endpoint$rules$threshold_multiplier), "\u00d7 MIC"
+    ))
+  }
+  if (endpoint$kind == "time_in_range") {
+    return(paste0(
+      "\u2265 ", number(100 * endpoint$rules$target_fraction),
+      "% within ", number(endpoint$rules$lower), " \u2013 ",
+      number(endpoint$rules$upper)
+    ))
+  }
+  if (endpoint$kind == "pre_event_target") {
+    return(paste(
+      nrow(endpoint$rules$targets), "protocol-defined pre-event window(s)"
+    ))
+  }
+  if (endpoint$kind == "timed_thresholds") {
+    return(paste(
+      nrow(endpoint$rules$targets), "protocol-defined timed threshold(s)"
+    ))
+  }
+  "Versioned custom target"
+}
+
+.lator_endpoint_outcome_summary <- function(
+    endpoint, evaluation, probs = c(0.05, 0.5, 0.95)) {
+  endpoint <- lator_endpoint_validate(endpoint)
+  probs <- as.numeric(probs)
+  if (length(probs) != 3L || any(!is.finite(probs)) ||
+      any(probs <= 0 | probs >= 1) || any(diff(probs) <= 0)) {
+    .lator_stop(
+      "`probs` must contain three increasing probabilities between zero and one."
+    )
+  }
+  one <- function(definition, item, component = NULL) {
+    metrics <- suppressWarnings(as.numeric(item$results$metric))
+    metrics <- metrics[is.finite(metrics)]
+    quantiles <- if (length(metrics)) {
+      stats::quantile(
+        metrics, probs = probs, names = FALSE, type = 8, na.rm = TRUE
+      )
+    } else rep(NA_real_, 3L)
+    fraction <- definition$kind %in%
+      c("fraction_time_above_threshold", "time_in_range")
+    scale <- if (fraction) 100 else 1
+    component <- component %||% list()
+    probability <- as.numeric(
+      component$attainment_probability %||%
+        item$attainment_probability %||% NA_real_
+    )
+    hard <- isTRUE(component$hard_constraint)
+    data.frame(
+      component_id = as.character(
+        component$component_id %||%
+          paste(definition$id, definition$version, sep = "@")
+      ),
+      endpoint_id = definition$id,
+      endpoint_version = definition$version,
+      name = definition$name,
+      role = as.character(component$role %||% "primary"),
+      metric = definition$metric,
+      display_unit = if (fraction) "%" else definition$unit,
+      display_scale = scale,
+      lower = unname(quantiles[[1L]]) * scale,
+      median = unname(quantiles[[2L]]) * scale,
+      upper = unname(quantiles[[3L]]) * scale,
+      lower_probability = probs[[1L]],
+      upper_probability = probs[[3L]],
+      target = .lator_endpoint_target_text(definition),
+      attainment_probability = probability,
+      hard_constraint = hard,
+      minimum_attainment = if (hard) {
+        as.numeric(component$minimum_attainment)
+      } else NA_real_,
+      constraint_pass = if (hard) {
+        isTRUE(component$constraint_pass)
+      } else TRUE,
+      weight = as.numeric(component$weight %||% 1),
+      normalized_weight = as.numeric(component$normalized_weight %||% 1),
+      stringsAsFactors = FALSE
+    )
+  }
+  if (!identical(endpoint$kind, "multi_endpoint")) {
+    return(one(endpoint, evaluation))
+  }
+  summaries <- evaluation$components
+  if (!is.data.frame(summaries) || nrow(summaries) !=
+      length(endpoint$rules$components)) {
+    .lator_stop("Multi-endpoint evaluation component summaries are unavailable.")
+  }
+  do.call(rbind, lapply(seq_along(endpoint$rules$components), function(index) {
+    component <- endpoint$rules$components[[index]]
+    component_id <- component$component_id
+    component_summary <- as.list(summaries[
+      match(component_id, summaries$component_id), , drop = FALSE
+    ])
+    item <- evaluation$component_evaluations[[component_id]] %||% NULL
+    if (is.null(item)) {
+      rows <- evaluation$component_results[
+        evaluation$component_results$component_id == component_id,
+        , drop = FALSE
+      ]
+      item <- list(
+        results = rows,
+        attainment_probability = component_summary$attainment_probability
+      )
+    }
+    one(component$endpoint, item, component_summary)
+  }))
+}
+
 #' Evaluate predictions against a therapeutic endpoint
 #' @param endpoint Endpoint definition.
 #' @param predictions Prediction data frame. Optional `SIM` identifies uncertainty replicates.
@@ -430,6 +853,15 @@ lator_endpoint_warfarin <- function(
 #' @export
 lator_endpoint_evaluate <- function(endpoint, predictions, patient = NULL, interval = NULL) {
   endpoint <- lator_endpoint_validate(endpoint)
+  if (identical(endpoint$kind, "multi_endpoint")) {
+    evaluations <- lapply(endpoint$rules$components, function(component) {
+      lator_endpoint_evaluate(
+        component$endpoint, predictions, patient = patient,
+        interval = interval
+      )
+    })
+    return(.lator_endpoint_combine_evaluations(endpoint, evaluations))
+  }
   predictions <- as.data.frame(predictions)
   columns <- .lator_prediction_columns(predictions)
   predictions$.lator_time <- as.numeric(predictions[[columns$time]])

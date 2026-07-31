@@ -8,6 +8,15 @@ test_that("models and endpoints are registered only inside encrypted workspace",
     "new endpoint version"
   )
   expect_s3_class(LibeRator:::.lator_model_get(workspace, "model-a")$model, "nm_model")
+  hydrated <- LibeRator:::.lator_registered_models(workspace)
+  expect_named(hydrated, "model-a")
+  expect_s3_class(hydrated[["model-a"]], "nm_model")
+  if (requireNamespace("callr", quietly = TRUE)) {
+    expect_true(callr::r(
+      function(model) inherits(model, "nm_model"),
+      args = list(model = hydrated[["model-a"]])
+    ))
+  }
   expect_s3_class(LibeRator:::.lator_endpoint_get(workspace, endpoint$id), "lator_endpoint")
 })
 

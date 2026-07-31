@@ -37,8 +37,9 @@
 #'   every browser session. This is intended for hosted research demonstrations
 #'   and prevents application users from sharing a workspace directory.
 #' @param teaching_example Seed an otherwise empty workspace with the synthetic
-#'   AED teaching patient, model, and endpoint. Intended for demonstrations;
-#'   the example is explicitly non-clinical.
+#'   AED teaching patient, model, individual efficacy and safety endpoints, and
+#'   their combined dual-endpoint objective. Intended for demonstrations; all
+#'   targets are explicitly non-clinical.
 #' @param host,port,launch.browser Passed to [shiny::runApp()].
 #' @param allow_remote Explicitly permit a non-loopback bind for governed test deployments.
 #' @return Invisibly, the Shiny app.
@@ -64,14 +65,20 @@ lator_gui <- function(workspace = NULL, path = NULL, passphrase = NULL, key = NU
   }
   supplied_models <- .lator_named_models(models)
   supplied_endpoints <- .lator_named_endpoints(endpoints)
-  teaching <- if (isTRUE(teaching_example)) lator_example_aed() else NULL
+  teaching <- if (isTRUE(teaching_example)) {
+    lator_example_dual_endpoint()
+  } else NULL
   if (!is.null(teaching)) {
     if (!"teaching-aed" %in% names(supplied_models)) {
       supplied_models[["teaching-aed"]] <- teaching$model
     }
     teaching_endpoint_id <- teaching$endpoint$id
-    if (!teaching_endpoint_id %in% names(supplied_endpoints)) {
-      supplied_endpoints[[teaching_endpoint_id]] <- teaching$endpoint
+    teaching_endpoints <- teaching$endpoints %||%
+      stats::setNames(list(teaching$endpoint), teaching_endpoint_id)
+    for (endpoint_id in names(teaching_endpoints)) {
+      if (!endpoint_id %in% names(supplied_endpoints)) {
+        supplied_endpoints[[endpoint_id]] <- teaching_endpoints[[endpoint_id]]
+      }
     }
   }
   favicon <- system.file("assets", "favicon.svg", package = "LibeRator")
@@ -79,6 +86,35 @@ lator_gui <- function(workspace = NULL, path = NULL, passphrase = NULL, key = NU
   prefix <- paste0("liberator-assets-", substr(.lator_id("gui"), 5, 16))
   if (file.exists(favicon)) shiny::addResourcePath(prefix, dirname(favicon))
   favicon_href <- if (file.exists(favicon)) paste0(prefix, "/favicon.svg") else ""
+  hosted <- nzchar(Sys.getenv("LIBER_HOSTED")) ||
+    nzchar(Sys.getenv("RSCONNECT_USER")) ||
+    nzchar(Sys.getenv("SHINYAPPS_ACCOUNT"))
+  liberary_catalog_available <- requireNamespace("LibeRary", quietly = TRUE) &&
+    all(c(
+      "library_get",
+      "library_list",
+      "library_model"
+    ) %in% getNamespaceExports("LibeRary"))
+  liberary_available <- liberary_catalog_available &&
+    all(c(
+      "library_clinical_qualifications",
+      "library_get",
+      "library_model"
+    ) %in% getNamespaceExports("LibeRary"))
+  model_discovery <- liberary_available &&
+    (!hosted || (!is.null(library_root) && dir.exists(path.expand(library_root))))
+  model_discovery_reason <- if (!liberary_available) {
+    "The installed LibeRary package does not provide the current clinical-qualification API."
+  } else if (hosted && !model_discovery) {
+    "Automatic LibeRary matching is unavailable in this hosted deployment because no governed catalogue was mounted."
+  } else ""
+  model_library_available <- liberary_catalog_available &&
+    (!hosted || (!is.null(library_root) && dir.exists(path.expand(library_root))))
+  model_library_reason <- if (!liberary_catalog_available) {
+    "Install the current LibeRary package to browse medication-specific models."
+  } else if (hosted && !model_library_available) {
+    "The LibeRary catalogue is not mounted in this hosted deployment."
+  } else ""
 
   ui <- htmltools::tags$html(
     htmltools::tags$head(
@@ -108,6 +144,7 @@ lator_gui <- function(workspace = NULL, path = NULL, passphrase = NULL, key = NU
       drug_id = NULL, endpoint_prompt = 0L,
       regimen = NULL, selected_candidate = NULL, prediction = NULL,
       model_selection = NULL,
+      model_library = list(), model_library_loaded = FALSE,
       data_revision = 0L,
       status = list(level = "info", text = "Workbench ready")
     )
@@ -129,6 +166,8 @@ lator_gui <- function(workspace = NULL, path = NULL, passphrase = NULL, key = NU
       state$patient_endpoints <- list()
       state$model_id <- NULL
       state$model_selection <- NULL
+      state$model_library <- list()
+      state$model_library_loaded <- FALSE
       if (is.null(patient_id) || !length(patient_id) ||
           is.na(patient_id[[1L]]) || !nzchar(patient_id[[1L]])) {
         return(invisible(NULL))
@@ -150,6 +189,20 @@ lator_gui <- function(workspace = NULL, path = NULL, passphrase = NULL, key = NU
       profile <- lator_patient_endpoint_get(
         patient, medication$drug[[1L]]
       )
+      history <- profile$endpoint_history %||% list()
+      for (selection in history) {
+        history_key <- as.character(selection$endpoint_key %||% "")
+        history_endpoint <- selection$endpoint_snapshot %||% NULL
+        if (nzchar(history_key) && !is.null(history_endpoint)) {
+          history_endpoint <- tryCatch(
+            lator_endpoint_validate(history_endpoint),
+            error = function(error) NULL
+          )
+          if (!is.null(history_endpoint)) {
+            state$patient_endpoints[[history_key]] <- history_endpoint
+          }
+        }
+      }
       endpoint_snapshot <- profile$endpoint_snapshot %||% NULL
       if (!is.null(endpoint_snapshot)) {
         endpoint_snapshot <- lator_endpoint_validate(endpoint_snapshot)
@@ -191,9 +244,7 @@ lator_gui <- function(workspace = NULL, path = NULL, passphrase = NULL, key = NU
       if (!is.null(existing) &&
           !is.null(existing$endpoint_snapshot) &&
           identical(existing$endpoint_hash, .lator_hash(endpoint))) {
-        state$patient_endpoints <- stats::setNames(
-          list(endpoint), existing$endpoint_key
-        )
+        state$patient_endpoints[[existing$endpoint_key]] <- endpoint
         return(existing$endpoint_key)
       }
       patient <- lator_patient_endpoint_set(
@@ -205,9 +256,50 @@ lator_gui <- function(workspace = NULL, path = NULL, passphrase = NULL, key = NU
         expected_revision = patient$revision,
         actor = actor
       )
-      state$patient_endpoints <- stats::setNames(list(endpoint), instance_key)
+      state$patient_endpoints[[instance_key]] <- endpoint
       invalidate_workspace_data()
       instance_key
+    }
+    persist_model_preference <- function(
+        model_id, actor = "model-selection") {
+      shiny::req(state$patient_id, state$drug_id)
+      model_id <- as.character(model_id %||% "")
+      model_id <- if (length(model_id) && !is.na(model_id[[1L]])) {
+        model_id[[1L]]
+      } else ""
+      if (nzchar(model_id) && !model_id %in% names(state$models)) {
+        .lator_stop("Unknown population model: ", model_id)
+      }
+      patient <- lator_patient_get(state$workspace, state$patient_id)
+      medications <- lator_patient_medications(patient)
+      medication <- medications[
+        medications$key == state$drug_id, , drop = FALSE
+      ]
+      if (nrow(medication) != 1L) {
+        .lator_stop(
+          "The selected medication is no longer on the patient timeline."
+        )
+      }
+      model_hash <- if (nzchar(model_id)) {
+        .lator_hash(state$models[[model_id]])
+      } else ""
+      existing <- .lator_patient_model_get(
+        patient, medication$drug[[1L]]
+      )
+      if (!is.null(existing) &&
+          identical(existing$model_id, model_id) &&
+          identical(existing$model_hash, model_hash)) {
+        return(model_id)
+      }
+      patient <- .lator_patient_model_set(
+        patient, medication$drug[[1L]], model_id, model_hash
+      )
+      lator_patient_save(
+        state$workspace, patient,
+        expected_revision = patient$revision, actor = actor
+      )
+      invalidate_workspace_data()
+      model_id
     }
     restore_model_selection <- function(patient_id) {
       state$model_selection <- NULL
@@ -215,6 +307,31 @@ lator_gui <- function(workspace = NULL, path = NULL, passphrase = NULL, key = NU
           !nzchar(patient_id[[1L]])) return(invisible(NULL))
       patient_id <- as.character(patient_id[[1L]])
       patient <- lator_patient_get(state$workspace, patient_id)
+      medications <- lator_patient_medications(patient)
+      medication <- medications[
+        medications$key == state$drug_id, , drop = FALSE
+      ]
+      preference <- if (nrow(medication) == 1L) {
+        .lator_patient_model_get(patient, medication$drug[[1L]])
+      } else NULL
+      if (!is.null(preference) && nzchar(preference$model_id)) {
+        if (preference$model_id %in% names(state$models)) {
+          current_hash <- .lator_hash(state$models[[preference$model_id]])
+          if (!nzchar(preference$model_hash) ||
+              identical(preference$model_hash, current_hash)) {
+            state$model_id <- preference$model_id
+            return(invisible(preference))
+          }
+          state$status <- list(
+            level = "warning",
+            text = paste(
+              "The previously selected population model has changed;",
+              "review and select it again"
+            )
+          )
+          return(invisible(preference))
+        }
+      }
       selections <- patient$model_selections %||% list()
       if (!is.null(state$drug_id) && length(selections)) {
         selections <- Filter(function(selection) {
@@ -243,6 +360,16 @@ lator_gui <- function(workspace = NULL, path = NULL, passphrase = NULL, key = NU
         do.call(lator_model_from_liberary, arguments)
       }, error = function(error) NULL)
       if (!is.null(imported)) {
+        if (!is.null(state$drug_id)) {
+          medications <- lator_patient_medications(patient)
+          medication <- medications[
+            medications$key == state$drug_id, , drop = FALSE
+          ]
+          if (nrow(medication) == 1L) {
+            attr(imported, "lator_medications") <-
+              medication$drug[[1L]]
+          }
+        }
         state$models[[key]] <- imported
         state$model_id <- key
       }
@@ -326,7 +453,14 @@ lator_gui <- function(workspace = NULL, path = NULL, passphrase = NULL, key = NU
         task = .liber_shared_task_snapshot(tasks),
         model_selection = state$model_selection,
         selected_drug = state$drug_id,
-        endpoint_prompt = state$endpoint_prompt
+        endpoint_prompt = state$endpoint_prompt,
+        hosted = hosted,
+        model_discovery = model_discovery,
+        model_discovery_reason = model_discovery_reason,
+        model_library = state$model_library,
+        model_library_loaded = state$model_library_loaded,
+        model_library_available = model_library_available,
+        model_library_reason = model_library_reason
       )
     })
 
@@ -372,8 +506,155 @@ lator_gui <- function(workspace = NULL, path = NULL, passphrase = NULL, key = NU
           )
           restore_model_selection(state$patient_id)
         } else if (action == "select_model") {
-          state$model_id <- as.character(event$id); state$regimen <- NULL
+          state$model_id <- persist_model_preference(
+            as.character(event$id %||% ""),
+            actor = "manual-model-selection"
+          )
+          state$regimen <- NULL
           state$selected_candidate <- NULL; state$prediction <- NULL
+        } else if (action == "load_model_library") {
+          shiny::req(state$patient_id, state$drug_id)
+          if (!isTRUE(model_library_available)) {
+            .lator_stop(model_library_reason)
+          }
+          patient <- lator_patient_get(state$workspace, state$patient_id)
+          medications <- lator_patient_medications(patient)
+          medication <- medications[
+            medications$key == state$drug_id, , drop = FALSE
+          ]
+          if (nrow(medication) != 1L) {
+            .lator_stop("The selected medication is no longer on the patient timeline.")
+          }
+          arguments <- list(drug = medication$drug[[1L]])
+          if (!is.null(library_root)) arguments$root <- library_root
+          state$model_library <- do.call(
+            .lator_liberary_models_for_drug, arguments
+          )
+          state$model_library_loaded <- TRUE
+        } else if (action == "model_import_library") {
+          shiny::req(state$patient_id, state$drug_id)
+          if (!isTRUE(model_library_available)) {
+            .lator_stop(model_library_reason)
+          }
+          patient <- lator_patient_get(state$workspace, state$patient_id)
+          medications <- lator_patient_medications(patient)
+          medication <- medications[
+            medications$key == state$drug_id, , drop = FALSE
+          ]
+          if (nrow(medication) != 1L) {
+            .lator_stop("The selected medication is no longer on the patient timeline.")
+          }
+          arguments <- list(drug = medication$drug[[1L]])
+          if (!is.null(library_root)) arguments$root <- library_root
+          scoped_models <- do.call(.lator_liberary_models_for_drug, arguments)
+          library_id <- .lator_scalar(event$library_id, "library_id")
+          selected <- Filter(function(item) {
+            identical(item$id, library_id)
+          }, scoped_models)
+          if (length(selected) != 1L) {
+            .lator_stop(
+              "The requested LibeRary model is not scoped to the selected medication."
+            )
+          }
+          selected <- selected[[1L]]
+          if (isTRUE(selected$researchAcknowledgementRequired) &&
+              !isTRUE(event$acknowledge_research)) {
+            .lator_stop(
+              "Acknowledge the Research status before importing this review-stage model."
+            )
+          }
+          import_arguments <- list(
+            library_id = library_id,
+            allow_unvalidated = isTRUE(
+              selected$researchAcknowledgementRequired
+            )
+          )
+          if (!is.null(library_root)) import_arguments$root <- library_root
+          model <- do.call(lator_model_from_liberary, import_arguments)
+          attr(model, "lator_medications") <- medication$drug[[1L]]
+          model_key <- paste0("liberary-", library_id)
+          provenance <- attr(
+            model, "library_provenance", exact = TRUE
+          ) %||% list()
+          provenance$selection_mode <- "manual"
+          provenance$selected_medication <- medication$drug[[1L]]
+          lator_model_register(
+            state$workspace, model, id = model_key,
+            name = attr(model, "name", exact = TRUE) %||% selected$title,
+            qualification = list(
+              status = if (isTRUE(selected$clinicallyQualified)) {
+                "qualified"
+              } else "research",
+              catalogue_status = selected$status,
+              clinical_status = selected$clinicalStatus
+            ),
+            endpoint_ids = state$endpoint_id %||% character(),
+            provenance = provenance,
+            actor = "manual-model-selection"
+          )
+          state$models[[model_key]] <- model
+          state$model_id <- persist_model_preference(
+            model_key, actor = "manual-model-selection"
+          )
+          state$model_selection <- NULL
+          state$regimen <- NULL
+          state$selected_candidate <- NULL
+          state$prediction <- NULL
+          state$status <- list(
+            level = if (isTRUE(selected$clinicallyQualified)) {
+              "success"
+            } else "warning",
+            text = paste("Selected LibeRary model", selected$title)
+          )
+        } else if (action == "model_create_template") {
+          shiny::req(state$patient_id, state$drug_id)
+          patient <- lator_patient_get(state$workspace, state$patient_id)
+          medications <- lator_patient_medications(patient)
+          medication <- medications[
+            medications$key == state$drug_id, , drop = FALSE
+          ]
+          if (nrow(medication) != 1L) {
+            .lator_stop("The selected medication is no longer on the patient timeline.")
+          }
+          model <- .lator_model_from_template_event(event)
+          attr(model, "lator_medications") <- medication$drug[[1L]]
+          model_key <- .lator_id("manual-model")
+          template_id <- as.character(
+            event$template_id %||% paste0("ADVAN", event$advan %||% "")
+          )
+          lator_model_register(
+            state$workspace, model, id = model_key,
+            name = attr(model, "name", exact = TRUE) %||% model_key,
+            qualification = list(
+              status = "research",
+              source = "manual-liberation-template"
+            ),
+            endpoint_ids = state$endpoint_id %||% character(),
+            provenance = list(
+              source = "LibeRation",
+              creation = "template",
+              template = template_id,
+              selected_medication = medication$drug[[1L]],
+              created_at = .lator_now()
+            ),
+            actor = "manual-model-template"
+          )
+          state$models[[model_key]] <- model
+          state$model_id <- persist_model_preference(
+            model_key, actor = "manual-model-template"
+          )
+          state$model_selection <- NULL
+          state$regimen <- NULL
+          state$selected_candidate <- NULL
+          state$prediction <- NULL
+          state$status <- list(
+            level = "success",
+            text = paste(
+              "Created and selected",
+              attr(model, "name", exact = TRUE) %||% "model",
+              "from a LibeRation template"
+            )
+          )
         } else if (action == "select_endpoint") {
           endpoint_key <- as.character(event$id %||% "")
           if (!nzchar(endpoint_key)) {
@@ -472,12 +753,32 @@ lator_gui <- function(workspace = NULL, path = NULL, passphrase = NULL, key = NU
           }
           value <- if (is.null(event$value) || !nzchar(as.character(event$value))) NA_real_ else as.numeric(event$value)
           metadata <- list()
-          if (event$type == "dose") metadata <- list(
-            route = event$route %||% "oral", cmt = as.integer(event$cmt %||% 1L),
-            rate = as.numeric(event$rate %||% 0),
-            drug = medication$drug[[1L]],
-            therapeutic_class = medication$therapeutic_class[[1L]]
-          )
+          if (event$type == "dose") {
+            dosing_interval <- suppressWarnings(as.numeric(
+              event$dosing_interval %||% ""
+            ))
+            if (!length(dosing_interval) || is.na(dosing_interval)) {
+              dosing_interval <- 0
+            }
+            if (!is.finite(dosing_interval) || dosing_interval < 0) {
+              .lator_stop("Dosing interval must be a non-negative number of hours.")
+            }
+            steady_state <- isTRUE(event$steady_state)
+            if (steady_state && dosing_interval <= 0) {
+              .lator_stop(
+                "A positive dosing interval is required for a steady-state dose."
+              )
+            }
+            metadata <- list(
+              route = event$route %||% "oral",
+              cmt = as.integer(event$cmt %||% 1L),
+              rate = as.numeric(event$rate %||% 0),
+              ii = dosing_interval,
+              ss = as.integer(steady_state),
+              drug = medication$drug[[1L]],
+              therapeutic_class = medication$therapeutic_class[[1L]]
+            )
+          }
           if (event$type == "concentration") metadata <- list(
             drug = medication$drug[[1L]],
             analyte = as.character(event$name)
@@ -498,6 +799,292 @@ lator_gui <- function(workspace = NULL, path = NULL, passphrase = NULL, key = NU
           state$status <- list(
             level = "success",
             text = paste("Evidence added to the immutable timeline - revision", patient$revision)
+          )
+        } else if (action == "correct_event") {
+          shiny::req(state$patient_id)
+          patient <- lator_patient_get(state$workspace, state$patient_id)
+          event_id <- .lator_scalar(
+            event$event_id %||% "", "event_id", max_chars = 128L
+          )
+          reason <- .lator_scalar(
+            event$reason %||% "", "reason", max_chars = 1000L
+          )
+          actor <- .lator_scalar(
+            event$actor %||% "local-clinician", "actor", max_chars = 128L
+          )
+          entered_in_error <- isTRUE(event$entered_in_error)
+          active_events <- .lator_active_events(patient)
+          active_ids <- vapply(
+            active_events, `[[`, character(1), "event_id"
+          )
+          location <- match(event_id, active_ids)
+          if (is.na(location)) {
+            .lator_stop(
+              "This evidence is no longer active. Refresh the ledger and ",
+              "amend its current replacement instead."
+            )
+          }
+          original <- active_events[[location]]
+          replacement <- list()
+          corrected_type <- original$type
+          if (!entered_in_error) {
+            corrected_name <- as.character(
+              event$name %||% original$name
+            )
+            metadata <- list()
+            if (corrected_type %in% c("dose", "concentration")) {
+              medications <- lator_patient_medications(patient)
+              treatment_drug <- trimws(as.character(
+                event$treatment_drug %||%
+                  original$metadata$drug %||% corrected_name
+              ))
+              medication <- medications[
+                medications$key == .lator_drug_key(treatment_drug),
+                , drop = FALSE
+              ]
+              if (nrow(medication) != 1L) {
+                .lator_stop(
+                  "Corrected dose and TDM evidence must reference a ",
+                  "medication already added to this patient."
+                )
+              }
+              allowed_analytes <- unique(c(
+                medication$drug[[1L]],
+                strsplit(
+                  medication$monitoring_analytes[[1L]] %||% "",
+                  "|", fixed = TRUE
+                )[[1L]]
+              ))
+              allowed_analytes <- allowed_analytes[nzchar(allowed_analytes)]
+              if (identical(corrected_type, "dose")) {
+                corrected_name <- medication$drug[[1L]]
+                dosing_interval <- suppressWarnings(as.numeric(
+                  event$dosing_interval %||% original$metadata$ii %||% 0
+                ))
+                if (!is.finite(dosing_interval) || dosing_interval < 0) {
+                  .lator_stop(
+                    "Dosing interval must be a non-negative number of hours."
+                  )
+                }
+                steady_state <- isTRUE(event$steady_state)
+                if (steady_state && dosing_interval <= 0) {
+                  .lator_stop(
+                    "A positive dosing interval is required for a ",
+                    "steady-state dose."
+                  )
+                }
+                metadata <- list(
+                  route = event$route %||%
+                    original$metadata$route %||% "oral",
+                  cmt = as.integer(
+                    event$cmt %||% original$metadata$cmt %||% 1L
+                  ),
+                  rate = as.numeric(
+                    event$rate %||% original$metadata$rate %||% 0
+                  ),
+                  ii = dosing_interval,
+                  ss = as.integer(steady_state),
+                  drug = medication$drug[[1L]],
+                  therapeutic_class =
+                    medication$therapeutic_class[[1L]]
+                )
+              } else {
+                if (!tolower(trimws(corrected_name)) %in%
+                    tolower(allowed_analytes)) {
+                  .lator_stop(
+                    "The corrected TDM analyte is not registered for ",
+                    medication$drug[[1L]], "."
+                  )
+                }
+                metadata <- list(
+                  drug = medication$drug[[1L]],
+                  analyte = corrected_name
+                )
+              }
+            }
+            corrected_value <- if (
+              is.null(event$value) ||
+                !nzchar(trimws(as.character(event$value)))
+            ) {
+              NA_real_
+            } else suppressWarnings(as.numeric(event$value))
+            replacement <- list(
+              time = as.numeric(event$time),
+              name = corrected_name,
+              value = corrected_value,
+              unit = as.character(event$unit %||% original$unit),
+              source = as.character(event$source %||% original$source),
+              missing_reason = as.character(
+                event$missing_reason %||% original$missing_reason
+              ),
+              metadata = metadata
+            )
+          }
+          patient <- lator_patient_correct_event(
+            patient, event_id = event_id, reason = reason,
+            replacement = replacement,
+            entered_in_error = entered_in_error, actor = actor
+          )
+          correction_event <- Filter(function(item) {
+            identical(
+              as.character(item$supersedes %||% ""), event_id
+            )
+          }, patient$events)[[1L]]
+          patient <- lator_patient_save(
+            state$workspace, patient, actor = actor
+          )
+          .lator_audit_append(
+            state$workspace, "evidence_corrected", "patient",
+            patient$patient_id,
+            detail = list(
+              patient_revision = patient$revision,
+              original_event_id = event_id,
+              correction_event_id = correction_event$event_id,
+              correction_action = if (entered_in_error) {
+                "entered_in_error"
+              } else "replacement",
+              reason = reason
+            ),
+            actor = actor
+          )
+          invalidate_workspace_data()
+          state$regimen <- NULL
+          state$selected_candidate <- NULL
+          state$prediction <- NULL
+          if (identical(corrected_type, "dose")) {
+            restore_therapy(
+              state$patient_id,
+              preferred_drug = correction_event$metadata$drug %||%
+                original$metadata$drug %||% original$name,
+              prompt_if_missing = FALSE
+            )
+            restore_model_selection(state$patient_id)
+          }
+          state$status <- list(
+            level = "success",
+            text = paste(
+              if (entered_in_error) {
+                "Evidence marked as entered in error"
+              } else "Evidence corrected",
+              "- original retained - revision", patient$revision
+            )
+          )
+        } else if (action %in% c(
+          "create_endpoint_set", "revise_endpoint_set"
+        )) {
+          shiny::req(state$patient_id, state$drug_id)
+          revising <- identical(action, "revise_endpoint_set")
+          original_key <- as.character(event$original_key %||% "")
+          available <- available_endpoints()
+          original <- if (revising && nzchar(original_key)) {
+            available[[original_key]]
+          } else NULL
+          if (revising &&
+              (is.null(original) ||
+               !identical(original$kind, "multi_endpoint") ||
+               !identical(original_key, state$endpoint_id))) {
+            .lator_stop(
+              "The multi-endpoint objective being modified is no longer selected."
+            )
+          }
+          patient <- lator_patient_get(state$workspace, state$patient_id)
+          medications <- lator_patient_medications(patient)
+          medication <- medications[
+            medications$key == state$drug_id, , drop = FALSE
+          ]
+          if (nrow(medication) != 1L) {
+            .lator_stop(
+              "The selected medication is no longer on the patient timeline."
+            )
+          }
+          component_input <- event$components %||% list()
+          if (!is.list(component_input) || length(component_input) < 2L) {
+            .lator_stop("Select at least two endpoint components.")
+          }
+          components <- lapply(component_input, function(item) {
+            key <- as.character(item$endpoint_key %||% "")
+            definition <- available[[key]]
+            if (is.null(definition) ||
+                identical(definition$kind, "multi_endpoint") ||
+                !identical(
+                  .lator_drug_key(definition$drug),
+                  medication$key[[1L]]
+                )) {
+              .lator_stop(
+                "Every objective component must be an available endpoint ",
+                "for the selected medication."
+              )
+            }
+            lator_endpoint_component(
+              definition,
+              role = as.character(item$role %||% "secondary"),
+              weight = as.numeric(item$weight %||% 1),
+              hard_constraint = isTRUE(item$hard_constraint),
+              minimum_attainment = as.numeric(
+                item$minimum_attainment %||% 0.9
+              )
+            )
+          })
+          name <- .lator_scalar(
+            event$name, "name", max_chars = 256L
+          )
+          version <- .lator_scalar(
+            event$version %||% "1.0.0", "version", max_chars = 32L
+          )
+          source <- .lator_scalar(
+            event$source, "source", max_chars = 1000L
+          )
+          objective_id <- if (revising) original$id else paste0(
+            "objective-", medication$key[[1L]], "-",
+            gsub(
+              "(^-+|-+$)", "",
+              gsub("[^a-z0-9]+", "-", tolower(name))
+            )
+          )
+          endpoint <- lator_endpoint_set(
+            id = objective_id, name = name,
+            drug = medication$drug[[1L]], components = components,
+            source = source,
+            status = as.character(event$status %||% "draft"),
+            version = version,
+            metadata = if (revising) list(
+              supersedes_endpoint_key = original_key,
+              patient_specific_revision = TRUE
+            ) else list(patient_specific_objective = TRUE)
+          )
+          current_profile <- lator_patient_endpoint_get(
+            patient, medication$drug[[1L]]
+          )
+          history <- current_profile$endpoint_history %||% list()
+          identity_exists <- any(vapply(history, function(item) {
+            identical(item$endpoint_id, endpoint$id) &&
+              identical(item$endpoint_version, endpoint$version)
+          }, logical(1)))
+          if (identity_exists) {
+            .lator_stop(
+              "Endpoint objective ", endpoint$id, "@", endpoint$version,
+              " already exists for this patient and medication. ",
+              "Use a new objective version."
+            )
+          }
+          state$endpoint_id <- persist_endpoint_preference(
+            endpoint = endpoint,
+            actor = if (revising) {
+              "multi-endpoint-modification"
+            } else "multi-endpoint-creation"
+          )
+          state$model_selection <- NULL
+          state$regimen <- NULL
+          state$selected_candidate <- NULL
+          state$prediction <- NULL
+          state$status <- list(
+            level = "success",
+            text = paste(
+              if (revising) {
+                "Saved and selected revised multi-endpoint objective"
+              } else "Created and selected multi-endpoint objective",
+              endpoint$name, paste0("v", endpoint$version)
+            )
           )
         } else if (action %in% c("create_endpoint", "revise_endpoint")) {
           shiny::req(state$patient_id, state$drug_id)
@@ -576,6 +1163,9 @@ lator_gui <- function(workspace = NULL, path = NULL, passphrase = NULL, key = NU
           )
         } else if (action == "auto_select_model") {
           shiny::req(state$patient_id, state$endpoint_id)
+          if (!isTRUE(model_discovery)) {
+            .lator_stop(model_discovery_reason)
+          }
           patient <- lator_patient_get(state$workspace, state$patient_id)
           arguments <- list(
             patient = patient,
@@ -595,6 +1185,14 @@ lator_gui <- function(workspace = NULL, path = NULL, passphrase = NULL, key = NU
             )
             if (!is.null(library_root)) import_arguments$root <- library_root
             selected_model <- do.call(lator_model_from_liberary, import_arguments)
+            medications <- lator_patient_medications(patient)
+            medication <- medications[
+              medications$key == state$drug_id, , drop = FALSE
+            ]
+            if (nrow(medication) == 1L) {
+              attr(selected_model, "lator_medications") <-
+                medication$drug[[1L]]
+            }
             model_key <- .lator_selection_model_key(selection)
             selected_candidate <- Filter(function(candidate) {
               identical(candidate$id, selection$selected_model_id) &&
@@ -618,7 +1216,9 @@ lator_gui <- function(workspace = NULL, path = NULL, passphrase = NULL, key = NU
               actor = "model-selection"
             )
             state$models[[model_key]] <- selected_model
-            state$model_id <- model_key
+            state$model_id <- persist_model_preference(
+              model_key, actor = "model-selection"
+            )
             state$status <- list(
               level = "success",
               text = paste("Selected qualified model", selection$selected_model_id)
@@ -637,6 +1237,25 @@ lator_gui <- function(workspace = NULL, path = NULL, passphrase = NULL, key = NU
         } else if (action == "assess") {
           shiny::req(state$patient_id, state$model_id, state$endpoint_id)
           patient <- lator_patient_get(state$workspace, state$patient_id)
+          endpoint <- available_endpoints()[[state$endpoint_id]]
+          assessment_mode <- as.character(event$mode %||% "static")
+          if (identical(assessment_mode, "dynamic")) {
+            dynamic_status <- .lator_dynamic_evidence_status(
+              patient, endpoint$drug
+            )
+            if (!isTRUE(dynamic_status$ready)) {
+              .lator_stop(dynamic_status$reason)
+            }
+          }
+          observation_scope <- as.character(
+            event$profile_observation_scope %||% "automatic"
+          )
+          observation_count <- suppressWarnings(as.integer(
+            event$profile_observation_count %||% 2L
+          ))
+          observation_since <- suppressWarnings(as.numeric(
+            event$profile_observation_since %||% NA_real_
+          ))
           .liber_shared_task_start(
             tasks, "LibeRator", ".lator_gui_background_task",
             args = list(
@@ -644,12 +1263,15 @@ lator_gui <- function(workspace = NULL, path = NULL, passphrase = NULL, key = NU
               arguments = list(
                 patient = patient,
                 model = state$models[[state$model_id]],
-                endpoint = available_endpoints()[[state$endpoint_id]],
-                mode = as.character(event$mode %||% "static"),
-                process_scale = as.numeric(event$process_scale %||% 0.1)
+                endpoint = endpoint,
+                mode = assessment_mode,
+                process_scale = as.numeric(event$process_scale %||% 0.1),
+                profile_observation_scope = observation_scope,
+                profile_observation_count = observation_count,
+                profile_observation_since = observation_since
               )
             ),
-            label = paste(event$mode %||% "static", "patient assessment"),
+            label = paste(assessment_mode, "patient assessment"),
             metadata = list(
               operation = "assess",
               patient_id = patient$patient_id,

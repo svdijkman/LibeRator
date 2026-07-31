@@ -39,6 +39,53 @@
   output
 }
 
+.lator_reject_known_model_defects <- function(model) {
+  provenance <- attr(model, "library_provenance", exact = TRUE) %||% list()
+  library_id <- as.character(provenance$library_id %||% "")
+  code <- gsub("[[:space:]]", "", as.character(model$PRED %||% ""))
+  if (identical(library_id, "aedapt_lamotrigine_he") &&
+      grepl("V=THETA(6)*WT", code, fixed = TRUE)) {
+    .lator_stop(
+      "This saved He et al. lamotrigine model is the superseded LibeRary ",
+      "1.0.0 translation with an incorrect volume relationship. Reopen ",
+      "'Add/select model' and add He et al. v1.0.1 before individualisation."
+    )
+  }
+  invisible(model)
+}
+
+.lator_model_profile_type <- function(model) {
+  explicit <- as.character(
+    attr(model, "lator_profile_type", exact = TRUE) %||% ""
+  )
+  if (length(explicit) == 1L &&
+      explicit %in% c("time_course", "steady_state_mean_only")) {
+    return(explicit)
+  }
+  provenance <- attr(model, "library_provenance", exact = TRUE) %||% list()
+  if (identical(
+    as.character(provenance$library_id %||% ""),
+    "aedapt_clonazepam_yukawa"
+  )) {
+    return("steady_state_mean_only")
+  }
+  direct <- identical(model$SOLVER, "direct") ||
+    identical(model$PRED_MODE, "pred")
+  code <- paste(
+    as.character(model$PRED %||% ""),
+    as.character(model$ERROR %||% ""),
+    collapse = ";"
+  )
+  temporal <- grepl(
+    "\\b(TIME|TAD|TSLD|TIME_AFTER_DOSE|A[0-9]+)\\b",
+    toupper(code), perl = TRUE
+  )
+  if (direct && !temporal) {
+    return("steady_state_mean_only")
+  }
+  "time_course"
+}
+
 .lator_model_catalog_path <- function(workspace) file.path(workspace$paths$models, "catalog.enc")
 
 .lator_selection_model_key <- function(selection) {
@@ -95,7 +142,21 @@ lator_model_register <- function(workspace, model, id = NULL, name = NULL,
 .lator_registered_models <- function(workspace) {
   catalog <- .lator_encrypt_read(.lator_model_catalog_path(workspace), workspace$key, list(items = list()))
   if (!length(catalog$items)) return(list())
-  result <- lapply(names(catalog$items), function(id) .lator_model_get(workspace, id))
+  result <- lapply(names(catalog$items), function(id) {
+    registration <- .lator_model_get(workspace, id)
+    model <- registration$model %||% NULL
+    if (!inherits(model, "nm_model")) {
+      .lator_stop(
+        "Registered model '", id,
+        "' does not contain a valid LibeRation nm_model."
+      )
+    }
+    if (is.null(attr(model, "name", exact = TRUE)) ||
+        !nzchar(as.character(attr(model, "name", exact = TRUE)))) {
+      attr(model, "name") <- registration$name %||% id
+    }
+    model
+  })
   names(result) <- names(catalog$items)
   result
 }
@@ -127,7 +188,8 @@ lator_model_from_liberary <- function(library_id, root = NULL,
   }
   model_args <- list(library_id = library_id)
   if (!is.null(root)) model_args$root <- root
-  control <- LibeRation::nm_control_read(do.call(LibeRary::library_model, model_args), strict = TRUE)
+  control_lines <- do.call(LibeRary::library_model, model_args)
+  control <- LibeRation::nm_control_read(control_lines, strict = TRUE)
   clinical_qualification <- NULL
   if (!is.null(qualification_id) && nzchar(as.character(qualification_id))) {
     qualifications <- .lator_liberary_api(
@@ -152,13 +214,20 @@ lator_model_from_liberary <- function(library_id, root = NULL,
   }
   provenance <- list(
     source = "LibeRary", library_id = library_id,
+    title = entry$manifest$title %||% library_id,
     library_version = entry$manifest$version %||% "", status_at_import = status,
     unvalidated_override = !identical(tolower(status), "validated"),
     imported_at = .lator_now(), evidence = entry$manifest$provenance %||% list(),
+    study = entry$manifest$study %||% list(),
+    confidence = entry$manifest$confidence %||% list(),
+    model_metadata = entry$manifest$model %||% list(),
     qualification = entry$manifest$qualification %||% list(),
     clinical_qualification = clinical_qualification
   )
   attr(control$model, "name") <- entry$manifest$title %||% library_id
   attr(control$model, "library_provenance") <- provenance
+  attr(control$model, "lator_parameter_labels") <- list(
+    theta = .lator_control_parameter_labels(control_lines, "THETA")
+  )
   control$model
 }

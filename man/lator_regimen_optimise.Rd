@@ -27,7 +27,9 @@ lator_regimen_optimise(
 
 \item{candidates}{Candidate data frame from [lator_regimen_candidates()].}
 
-\item{endpoint}{Endpoint to optimise; defaults to the assessment endpoint.}
+\item{endpoint}{Endpoint or versioned multi-endpoint objective to optimise;
+defaults to the assessment endpoint. Multi-endpoint components are
+evaluated on shared posterior draws.}
 
 \item{nsim}{Number of posterior draws.}
 
@@ -50,6 +52,8 @@ historical event visible to the assessment.}
 }
 \value{
 A ranked result with summaries and per-candidate trajectories.
+  Multi-endpoint results also include component and joint attainment,
+  normalized expected utility, hard-constraint status, and Pareto status.
 }
 \description{
 The complete dosing history is replayed for every posterior draw so that

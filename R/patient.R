@@ -85,6 +85,7 @@ print.lator_patient <- function(x, ...) {
   key = character(), drug = character(), therapeutic_class = character(),
   monitoring_analytes = character(),
   last_dose_time = numeric(), endpoint_key = character(),
+  model_id = character(),
   treatment_status = character(),
   stringsAsFactors = FALSE
 )
@@ -132,6 +133,7 @@ lator_patient_medication_add <- function(
     treatment_status = "active", added_at = now,
     endpoint_key = "", endpoint_id = "", endpoint_version = "",
     endpoint_hash = "", selected_at = "",
+    model_id = "", model_hash = "", model_selected_at = "",
     endpoint_history = list()
   )
   patient$updated_at <- now
@@ -186,6 +188,7 @@ lator_patient_medications <- function(patient, cutoff = Inf) {
       ),
       last_dose_time = if (is.null(latest)) NA_real_ else as.numeric(latest$time),
       endpoint_key = as.character(profile$endpoint_key %||% ""),
+      model_id = as.character(profile$model_id %||% ""),
       treatment_status = as.character(
         profile$treatment_status %||% "active"
       ),
@@ -263,6 +266,9 @@ lator_patient_endpoint_set <- function(
     endpoint_hash = selection$endpoint_hash,
     selected_at = selection$selected_at,
     endpoint_snapshot = endpoint,
+    model_id = existing$model_id %||% "",
+    model_hash = existing$model_hash %||% "",
+    model_selected_at = existing$model_selected_at %||% "",
     endpoint_history = history
   )
   patient$updated_at <- .lator_now()
@@ -279,6 +285,42 @@ lator_patient_endpoint_get <- function(patient, drug) {
   patient$therapies[[.lator_drug_key(drug)]] %||% NULL
 }
 
+.lator_patient_model_set <- function(patient, drug, model_id,
+                                     model_hash = "") {
+  patient <- .lator_validate_patient(patient)
+  key <- .lator_drug_key(drug)
+  profile <- patient$therapies[[key]] %||% NULL
+  if (is.null(profile)) {
+    .lator_stop(
+      "Medication `", drug,
+      "` must be added before selecting a population model."
+    )
+  }
+  model_id <- .lator_scalar(
+    model_id, "model_id", allow_empty = TRUE, max_chars = 128L
+  )
+  model_hash <- .lator_scalar(
+    model_hash, "model_hash", allow_empty = TRUE, max_chars = 256L
+  )
+  profile$model_id <- model_id
+  profile$model_hash <- model_hash
+  profile$model_selected_at <- if (nzchar(model_id)) .lator_now() else ""
+  patient$therapies[[key]] <- profile
+  patient$updated_at <- .lator_now()
+  patient
+}
+
+.lator_patient_model_get <- function(patient, drug) {
+  patient <- .lator_validate_patient(patient)
+  profile <- patient$therapies[[.lator_drug_key(drug)]] %||% NULL
+  if (is.null(profile)) return(NULL)
+  list(
+    model_id = as.character(profile$model_id %||% ""),
+    model_hash = as.character(profile$model_hash %||% ""),
+    selected_at = as.character(profile$model_selected_at %||% "")
+  )
+}
+
 .lator_event_time <- function(time) {
   if (inherits(time, "POSIXt")) return(as.numeric(time) / 3600)
   .lator_number(time, "time")
@@ -289,7 +331,10 @@ lator_patient_endpoint_get <- function(patient, drug) {
                "procedure", "state_boundary", "adherence", "note", "correction")
   event$type <- match.arg(as.character(event$type), allowed)
   event$time <- .lator_event_time(event$time)
-  event$name <- .lator_scalar(event$name, "name", allow_empty = event$type %in% c("note", "state_boundary"))
+  event$name <- .lator_scalar(
+    event$name, "name",
+    allow_empty = event$type %in% c("note", "state_boundary", "correction")
+  )
   event$unit <- .lator_scalar(event$unit, "unit", allow_empty = TRUE, max_chars = 64L)
   event$source <- .lator_scalar(event$source, "source", allow_empty = TRUE, max_chars = 128L)
   event$missing_reason <- .lator_scalar(
@@ -353,6 +398,116 @@ lator_patient_add_event <- function(patient, type, time, name = "", value = NA,
   patient$events <- patient$events[order_index]
   patient$updated_at <- .lator_now()
   patient
+}
+
+#' Correct or withdraw immutable patient evidence
+#'
+#' The original event is retained. A replacement event is appended with a
+#' `supersedes` link, correction reason, actor, original-event hash, and stable
+#' correction-chain root. Marking an event as entered in error appends a typed
+#' correction tombstone, so the original is excluded from modelling without
+#' inventing replacement clinical evidence.
+#'
+#' @param patient Patient record.
+#' @param event_id Active event to correct.
+#' @param reason Required reason for the correction.
+#' @param replacement Named list of replacement event fields. Unspecified
+#'   fields retain their value from the active event. Supported fields are
+#'   `type`, `time`, `name`, `value`, `unit`, `source`, `missing_reason`,
+#'   `occasion`, and `metadata`.
+#' @param entered_in_error If `TRUE`, withdraw the event without replacing it
+#'   with usable evidence.
+#' @param actor Clinician or system actor responsible for the correction.
+#' @return Updated patient record containing both the original and correction.
+#' @export
+lator_patient_correct_event <- function(
+    patient, event_id, reason, replacement = list(),
+    entered_in_error = FALSE, actor = "local-clinician") {
+  patient <- .lator_validate_patient(patient)
+  event_id <- .lator_scalar(event_id, "event_id", max_chars = 128L)
+  reason <- .lator_scalar(reason, "reason", max_chars = 1000L)
+  actor <- .lator_scalar(actor, "actor", max_chars = 128L)
+  if (!is.list(replacement) ||
+      (length(replacement) && is.null(names(replacement)))) {
+    .lator_stop("`replacement` must be a named list.")
+  }
+  supported <- c(
+    "type", "time", "name", "value", "unit", "source",
+    "missing_reason", "occasion", "metadata"
+  )
+  unknown <- setdiff(names(replacement), supported)
+  if (length(unknown)) {
+    .lator_stop(
+      "Unknown replacement field(s): ", paste(unknown, collapse = ", "), "."
+    )
+  }
+  ids <- vapply(patient$events, `[[`, character(1), "event_id")
+  location <- match(event_id, ids)
+  if (is.na(location)) {
+    .lator_stop("`event_id` does not identify an existing patient event.")
+  }
+  superseded <- vapply(patient$events, function(event) {
+    identical(as.character(event$supersedes %||% ""), event_id)
+  }, logical(1))
+  if (any(superseded)) {
+    .lator_stop(
+      "Only active evidence can be corrected. Amend its current replacement ",
+      "instead."
+    )
+  }
+  original <- patient$events[[location]]
+  if (identical(original$type, "correction")) {
+    .lator_stop(
+      "An entered-in-error marker cannot itself be amended; add a new ",
+      "evidence event if information later becomes available."
+    )
+  }
+  previous_correction <- original$metadata$correction %||% list()
+  root_id <- as.character(
+    previous_correction$root_event_id %||% original$event_id
+  )
+  correction <- list(
+    action = if (isTRUE(entered_in_error)) {
+      "entered_in_error"
+    } else "replacement",
+    reason = reason, actor = actor,
+    corrected_event_id = original$event_id,
+    root_event_id = root_id,
+    original_event_hash = .lator_hash(original),
+    recorded_at = .lator_now()
+  )
+  metadata <- original$metadata %||% list()
+  if (!is.null(replacement$metadata)) {
+    if (!is.list(replacement$metadata)) {
+      .lator_stop("`replacement$metadata` must be a list.")
+    }
+    metadata <- utils::modifyList(metadata, replacement$metadata)
+  }
+  metadata$correction <- correction
+
+  if (isTRUE(entered_in_error)) {
+    return(lator_patient_add_event(
+      patient, type = "correction", time = original$time,
+      name = original$name, value = NA, unit = original$unit,
+      source = actor, missing_reason = "", occasion = original$occasion,
+      supersedes = original$event_id, metadata = metadata
+    ))
+  }
+  replacement_event <- original[c(
+    "type", "time", "name", "value", "unit", "source",
+    "missing_reason", "occasion"
+  )]
+  for (field in intersect(names(replacement), names(replacement_event))) {
+    replacement_event[[field]] <- replacement[[field]]
+  }
+  do.call(lator_patient_add_event, c(
+    list(patient = patient),
+    replacement_event,
+    list(
+      supersedes = original$event_id,
+      metadata = metadata
+    )
+  ))
 }
 
 #' Add several event records

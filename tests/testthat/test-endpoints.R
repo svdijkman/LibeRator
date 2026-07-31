@@ -7,6 +7,170 @@ test_that("AED endpoints target the supplied range midpoint", {
   expect_equal(endpoint$rules$target, 15)
 })
 
+test_that("multi-endpoint objectives preserve joint posterior dependence", {
+  primary <- lator_endpoint(
+    "drug-a-efficacy", "Drug A efficacy", "Drug A",
+    "therapeutic_range", "last_interval_average", "mg/L",
+    rules = list(lower = 10, upper = 20, target = 15),
+    source = "Protocol"
+  )
+  safety <- lator_endpoint(
+    "drug-a-safety", "Drug A exposure safety", "Drug A",
+    "therapeutic_range", "last_interval_average", "mg/L",
+    rules = list(lower = 5, upper = 17, target = 11),
+    source = "Protocol"
+  )
+  objective <- lator_endpoint_set(
+    "drug-a-objective", "Drug A benefit-risk objective", "Drug A",
+    components = list(
+      lator_endpoint_component(primary, "primary", weight = 2),
+      lator_endpoint_component(
+        safety, "safety", weight = 1, hard_constraint = TRUE,
+        minimum_attainment = 0.75
+      )
+    ),
+    source = "Versioned clinical protocol"
+  )
+  predictions <- data.frame(
+    SIM = rep(1:2, each = 3),
+    TIME = rep(0:2, 2),
+    IPRED = c(14, 15, 16, 18, 19, 20)
+  )
+  evaluated <- lator_endpoint_evaluate(objective, predictions)
+  expect_s3_class(objective, "lator_endpoint")
+  expect_identical(objective$kind, "multi_endpoint")
+  expect_equal(evaluated$primary_attainment_probability, 1)
+  expect_equal(evaluated$joint_attainment_probability, 0.5)
+  expect_false(evaluated$hard_constraints_pass)
+  expect_equal(nrow(evaluated$components), 2L)
+  expect_equal(nrow(evaluated$component_results), 4L)
+  expect_type(evaluated$utility_definition$normalized_weights, "list")
+  expect_equal(
+    unname(unlist(evaluated$utility_definition$normalized_weights)),
+    c(2 / 3, 1 / 3)
+  )
+  outcomes <- .lator_endpoint_outcome_summary(
+    objective, evaluated, probs = c(0.05, 0.5, 0.95)
+  )
+  expect_equal(nrow(outcomes), 2L)
+  expect_equal(outcomes$median, c(17, 17))
+  expect_equal(outcomes$lower, c(15, 15))
+  expect_equal(outcomes$upper, c(19, 19))
+  expect_identical(outcomes$role, c("primary", "safety"))
+  expect_match(outcomes$target[[1L]], "10")
+  expect_match(outcomes$target[[2L]], "17")
+  expect_true(outcomes$hard_constraint[[2L]])
+  expect_false(outcomes$constraint_pass[[2L]])
+  expect_true(
+    evaluated$expected_utility > 0 &&
+      evaluated$expected_utility <= 1
+  )
+  expect_warning(
+    jsonlite::toJSON(
+      evaluated, auto_unbox = TRUE, keep_vec_names = TRUE
+    ),
+    NA
+  )
+})
+
+test_that("GUI payload normalization future-proofs named JSON objects", {
+  payload <- list(
+    weights = c(primary = 2 / 3, safety = 1 / 3),
+    rows = data.frame(id = "row-1", value = 2)
+  )
+  normalized <- .lator_gui_json_safe(payload)
+  expect_type(normalized$weights, "list")
+  expect_named(normalized$weights, c("primary", "safety"))
+  expect_s3_class(normalized$rows, "data.frame")
+  expect_warning(
+    jsonlite::toJSON(
+      normalized, auto_unbox = TRUE, keep_vec_names = TRUE
+    ),
+    NA
+  )
+})
+
+test_that("dual-endpoint teaching case is complete and explicitly synthetic", {
+  example <- lator_example_dual_endpoint()
+  expect_s3_class(example$model, "nm_model")
+  expect_s3_class(example$objective, "lator_endpoint")
+  expect_identical(example$endpoint, example$objective)
+  expect_identical(example$objective$kind, "multi_endpoint")
+  expect_identical(
+    names(example$endpoints),
+    c(
+      "aed-example-aed", "teaching-aed-trough-safety",
+      "teaching-aed-benefit-risk"
+    )
+  )
+  components <- example$objective$rules$components
+  expect_identical(
+    vapply(components, `[[`, character(1), "role"),
+    c("primary", "safety")
+  )
+  expect_equal(
+    vapply(components, `[[`, numeric(1), "weight"),
+    c(2, 1)
+  )
+  expect_false(components[[1L]]$hard_constraint)
+  expect_true(components[[2L]]$hard_constraint)
+  expect_equal(components[[2L]]$minimum_attainment, 0.75)
+  expect_true(isTRUE(example$objective$metadata$non_clinical))
+  expect_equal(example$objective$metadata$regimen_grid$amounts,
+               c(150, 225, 300, 375, 450))
+  expect_equal(nrow(example$candidates), 10L)
+})
+
+test_that("multi-endpoint definitions reject ambiguous or mismatched inputs", {
+  first <- lator_endpoint_aed(
+    "Drug A", 10, 20, "mg/L", "Protocol"
+  )
+  second <- lator_endpoint(
+    "drug-a-upper", "Drug A upper exposure", "Drug A",
+    "therapeutic_range", "last_interval_average", "mg/L",
+    rules = list(lower = 1, upper = 25, target = 13),
+    source = "Protocol"
+  )
+  expect_error(
+    lator_endpoint_set(
+      "invalid-primary", "Invalid", "Drug A",
+      list(
+        lator_endpoint_component(first, "secondary"),
+        lator_endpoint_component(second, "secondary")
+      ),
+      source = "Protocol"
+    ),
+    "exactly one primary"
+  )
+  other_drug <- lator_endpoint_aed(
+    "Drug B", 1, 2, "mg/L", "Protocol"
+  )
+  expect_error(
+    lator_endpoint_set(
+      "invalid-drug", "Invalid", "Drug A",
+      list(
+        lator_endpoint_component(first, "primary"),
+        lator_endpoint_component(other_drug, "safety")
+      ),
+      source = "Protocol"
+    ),
+    "must match"
+  )
+})
+
+test_that("Pareto flags retain non-dominated eligible candidates", {
+  criteria <- rbind(
+    balanced = c(0.2, 0.2),
+    efficacy = c(0.1, 0.4),
+    dominated = c(0.3, 0.4),
+    ineligible = c(0.01, 0.01)
+  )
+  expect_identical(
+    .lator_pareto_flags(criteria, c(TRUE, TRUE, TRUE, FALSE)),
+    c(TRUE, TRUE, FALSE, FALSE)
+  )
+})
+
 test_that("beta-lactam endpoint resolves longitudinal MIC", {
   patient <- lator_patient_new("P001")
   patient <- lator_patient_add_event(patient, "covariate", 0, "MIC", 2, "mg/L")
@@ -15,6 +179,13 @@ test_that("beta-lactam endpoint resolves longitudinal MIC", {
   evaluated <- lator_endpoint_evaluate(endpoint, predictions, patient)
   expect_equal(evaluated$median_metric, 0.5, tolerance = 1e-12)
   expect_equal(evaluated$attainment_probability, 1)
+  outcome <- .lator_endpoint_outcome_summary(
+    endpoint, evaluated, probs = c(0.05, 0.5, 0.95)
+  )
+  expect_equal(outcome$display_scale, 100)
+  expect_equal(outcome$median, 50)
+  expect_identical(outcome$display_unit, "%")
+  expect_match(outcome$target, "40")
 })
 
 test_that("ATG endpoints validate explicit pre-event windows", {

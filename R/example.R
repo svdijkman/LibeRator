@@ -51,3 +51,82 @@ lator_example_aed <- function() {
   )
   list(model = model, patient = patient, endpoint = endpoint)
 }
+
+#' Synthetic dual-endpoint benefit-risk teaching case
+#'
+#' Extends [lator_example_aed()] with a primary average-concentration endpoint
+#' and a separate trough-safety endpoint for the same synthetic medication.
+#' The safety component is a hard posterior chance constraint, while the two
+#' component utilities are combined with explicit 2:1 efficacy-to-safety
+#' weights. All values are deliberately synthetic and must not be interpreted
+#' as clinical targets.
+#'
+#' @return Named list containing `model`, `patient`, the combined `endpoint`
+#'   (also available as `objective`), the individual `endpoints`, and a
+#'   candidate-regimen grid suitable for [lator_regimen_optimise()].
+#' @examples
+#' example <- lator_example_dual_endpoint()
+#' example$objective
+#' vapply(example$endpoints, `[[`, character(1), "name")
+#' @export
+lator_example_dual_endpoint <- function() {
+  base <- lator_example_aed()
+  efficacy <- base$endpoint
+  safety <- lator_endpoint(
+    id = "teaching-aed-trough-safety",
+    name = "Synthetic trough safety window",
+    drug = efficacy$drug,
+    kind = "trough_range",
+    metric = "trough",
+    unit = efficacy$unit,
+    rules = list(lower = 0.5, upper = 5, target = 2.75),
+    source = "Synthetic teaching target; not a clinical range",
+    status = "reviewed",
+    metadata = list(
+      teaching = TRUE, non_clinical = TRUE,
+      interpretation = "Keep the periodic steady-state trough in a synthetic safety window."
+    )
+  )
+  objective <- lator_endpoint_set(
+    id = "teaching-aed-benefit-risk",
+    name = "Synthetic efficacy-safety objective",
+    drug = efficacy$drug,
+    source = "Synthetic teaching protocol; not for clinical use",
+    status = "reviewed",
+    components = list(
+      lator_endpoint_component(
+        efficacy, role = "primary", weight = 2
+      ),
+      lator_endpoint_component(
+        safety, role = "safety", weight = 1,
+        hard_constraint = TRUE, minimum_attainment = 0.75
+      )
+    ),
+    metadata = list(
+      teaching = TRUE, non_clinical = TRUE,
+      explanation = paste(
+        "Candidates must have at least 75% posterior probability of meeting",
+        "the trough-safety window. Eligible candidates are ranked using",
+        "two-thirds efficacy utility and one-third safety utility."
+      ),
+      regimen_grid = list(
+        amounts = c(150, 225, 300, 375, 450),
+        intervals = c(12, 24), horizon = 168, posterior_draws = 100L
+      )
+    )
+  )
+  endpoints <- list(efficacy, safety, objective)
+  names(endpoints) <- vapply(endpoints, `[[`, character(1), "id")
+  list(
+    model = base$model,
+    patient = base$patient,
+    endpoint = objective,
+    objective = objective,
+    endpoints = endpoints,
+    candidates = lator_regimen_candidates(
+      amounts = c(150, 225, 300, 375, 450),
+      intervals = c(12, 24),
+      horizon = 168
+    )
+  )
+}

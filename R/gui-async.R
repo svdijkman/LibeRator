@@ -11,6 +11,12 @@
       arguments$endpoint,
       mode = arguments$mode,
       process_scale = arguments$process_scale,
+      profile_observation_scope =
+        arguments$profile_observation_scope %||% "automatic",
+      profile_observation_count =
+        arguments$profile_observation_count %||% 2L,
+      profile_observation_since =
+        arguments$profile_observation_since %||% NA_real_,
       workspace = NULL
     ),
     optimise = lator_regimen_optimise(

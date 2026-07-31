@@ -135,3 +135,45 @@ test_that("model-selection decisions are retained on the encrypted patient", {
                selection$selection_hash)
   expect_true(isTRUE(attr(lator_workspace_audit(workspace), "valid")))
 })
+
+test_that("multi-endpoint model selection requires qualification for every component", {
+  efficacy <- lator_endpoint_aed(
+    "Drug A", 2, 8, "mg/L", "Institutional protocol",
+    status = "qualified"
+  )
+  safety <- lator_endpoint(
+    id = "drug-a-safety", name = "Drug A safety trough",
+    drug = "Drug A", kind = "trough_range", metric = "trough",
+    unit = "mg/L", rules = list(lower = 1, upper = 10, target = 5.5),
+    source = "Institutional protocol", status = "qualified"
+  )
+  objective <- lator_endpoint_set(
+    id = "drug-a-benefit-risk", name = "Drug A benefit-risk",
+    drug = "Drug A", source = "Institutional protocol",
+    status = "qualified",
+    components = list(
+      lator_endpoint_component(efficacy, role = "primary"),
+      lator_endpoint_component(safety, role = "safety")
+    )
+  )
+
+  incomplete <- lator_test_qualification("incomplete")
+  blocked <- lator_model_select(
+    lator_selection_patient(), objective, list(incomplete)
+  )
+  expect_equal(blocked$status, "no_suitable_model")
+  expect_true(
+    "endpoint_outside_qualification" %in%
+      blocked$candidates[[1L]]$blockers
+  )
+
+  complete <- lator_test_qualification("complete")
+  complete$qualification$scope$endpoint_kinds <- c(
+    "therapeutic_range", "trough_range"
+  )
+  selected <- lator_model_select(
+    lator_selection_patient(), objective, list(complete)
+  )
+  expect_equal(selected$status, "selected")
+  expect_equal(selected$selected_model_id, "complete")
+})

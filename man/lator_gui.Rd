@@ -45,8 +45,9 @@ every browser session. This is intended for hosted research demonstrations
 and prevents application users from sharing a workspace directory.}
 
 \item{teaching_example}{Seed an otherwise empty workspace with the synthetic
-AED teaching patient, model, and endpoint. Intended for demonstrations;
-the example is explicitly non-clinical.}
+AED teaching patient, model, individual efficacy and safety endpoints, and
+their combined dual-endpoint objective. Intended for demonstrations; all
+targets are explicitly non-clinical.}
 }
 \value{
 Invisibly, the Shiny app.

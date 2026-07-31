@@ -39,6 +39,22 @@ lator_covariate_at(
 
 The weight scheduled at hour 168 is explicitly missing. LOCF can still be an appropriate modelling policy, but the resolved value carries the `resolved_after_missing` status, source event, age, and missing reason. A population fallback is used only when the caller supplies it explicitly.
 
+Evidence is immutable but correctable. The workbench's **Amend** action, or
+`lator_patient_correct_event()`, appends a linked replacement and retains the
+original record. A reason and responsible actor are mandatory. If no
+replacement should enter the model, mark the record as entered in error; this
+appends a typed tombstone instead of deleting history.
+
+```{r correction, eval=FALSE}
+dose_id <- example$patient$events[[1L]]$event_id
+patient <- lator_patient_correct_event(
+  example$patient, dose_id,
+  reason = "Dose was transcribed incorrectly from the source record.",
+  replacement = list(value = 125),
+  actor = "clinician-42"
+)
+```
+
 Medication records are added to the treatment profile before entering doses or
 TDM. Optional monitored analytes keep active metabolites linked to their parent
 treatment:
@@ -99,6 +115,45 @@ forecasts[[1L]]$forecast
 
 Each posterior draw replays the complete dosing history before the future candidate regimen. For the AED endpoint, the default score is distance from the midpoint of the supplied therapeutic range. Other endpoint objects can evaluate pre-transplant windows, AUC/trough ranges, or fraction of time above a longitudinal MIC.
 
+Several endpoints for the same medication can be combined into a versioned
+clinical objective:
+
+```{r multi-endpoint, eval=FALSE}
+dual <- lator_example_dual_endpoint()
+objective <- dual$objective
+
+comparison <- lator_regimen_optimise(
+  lator_assess(dual$patient, dual$model, objective, mode = "static"),
+  dual$patient, dual$candidates, endpoint = objective,
+  nsim = 200, seed = 123
+)
+comparison$summary[, c(
+  "amount", "interval", "primary_attainment_probability",
+  "joint_attainment_probability", "expected_utility",
+  "hard_constraints_pass", "pareto_optimal", "rank"
+)]
+```
+
+Component and joint attainment are calculated from the same posterior draws,
+so correlated outcomes are retained. Hard component thresholds are
+posterior-probability constraints. Among candidates that pass them, LibeRator
+ranks the explicit weighted expected utility and marks the Pareto-efficient
+set; it does not hide or infer clinical trade-off weights.
+
+The Future prediction view does not leave these results as percentages alone.
+For each endpoint component it reports the posterior median metric and its
+posterior interval in native units beside the target definition, attainment
+probability, clinical role, and hard-constraint result. The values and
+probabilities are summaries of the same posterior draws, so they cannot drift
+apart through a separate calculation.
+
+In this synthetic example, average concentration in the final dosing interval
+is the primary efficacy endpoint. Periodic steady-state trough is the safety
+endpoint. Safety requires at least 75% posterior attainment; only candidates
+passing that gate are ranked. The explicit 2:1 efficacy-to-safety weights
+normalize to two-thirds and one-third. All numerical targets are teaching
+values, not treatment guidance.
+
 The optimisation step already generates candidate trajectories efficiently.
 `lator_regimen_predict()` does not silently re-fit or re-simulate them; it
 creates linked forecast artifacts from the selected candidates and retains
@@ -113,14 +168,19 @@ workspace <- lator_workspace(
   "~/LibeR/liberator-workspace",
   passphrase = "use a long, unique research passphrase"
 )
-lator_patient_save(workspace, example$patient)
+lator_patient_save(workspace, dual$patient)
 lator_gui(
   workspace = workspace,
-  models = list(aed = example$model),
-  endpoints = list(aed = example$endpoint),
+  models = list(aed = dual$model),
+  endpoints = dual$endpoints,
   library_root = "~/LibeR-data/library"
 )
 ```
+
+For the shortest demonstration, start a fresh workspace with
+`lator_gui(path = tempfile(), passphrase = "a long teaching passphrase",
+teaching_example = TRUE)`. The GUI then preselects the combined objective and
+prefills its candidate-regimen grid.
 
 The **Find best model** action evaluates only current, scoped clinical-use
 qualifications from LibeRary and fails closed when no model is suitable or when

@@ -15,6 +15,12 @@ lator_assess(
   covariate_policies = list(),
   process_scale = 0.1,
   process_covariance = NULL,
+  profile_population_draws = 200L,
+  profile_interval_probs = c(0.025, 0.5, 0.975),
+  profile_observation_scope = c("automatic", "latest", "last_n", "all", "since"),
+  profile_observation_count = 2L,
+  profile_observation_since = NA_real_,
+  profile_episode_gap_hours = 1008,
   workspace = NULL,
   actor = "local-session",
   ...
@@ -25,7 +31,8 @@ lator_assess(
 
 \item{model}{LibeRation population model.}
 
-\item{endpoint}{Versioned therapeutic endpoint.}
+\item{endpoint}{Versioned therapeutic endpoint or multi-endpoint objective
+created with [lator_endpoint_set()].}
 
 \item{analyte}{Event drug/analyte name; defaults to `endpoint$drug`.}
 
@@ -42,6 +49,27 @@ lator_assess(
 \item{process_scale}{Random-walk innovation covariance as a multiple of OMEGA.}
 
 \item{process_covariance}{Optional explicit innovation covariance.}
+
+\item{profile_population_draws}{Number of deterministic low-discrepancy
+OMEGA draws used for the similar-patient population prediction interval.
+Set to zero to disable the interval.}
+
+\item{profile_interval_probs}{Three probabilities for the lower, median and
+upper similar-patient interval. Residual error is deliberately excluded.}
+
+\item{profile_observation_scope}{TDM observations shown over the
+individualised dosing-interval profile: `"automatic"` identifies the
+current monitoring episode, `"latest"` shows one point, `"last_n"` shows
+the requested number, `"all"` shows all history, and `"since"` uses an
+explicit patient-timeline hour. This changes display selection only; all
+evidence through `cutoff` remains available to the fit.}
+
+\item{profile_observation_count}{Number of observations for `"last_n"`.}
+
+\item{profile_observation_since}{Patient-timeline hour for `"since"`.}
+
+\item{profile_episode_gap_hours}{Gap used to separate monitoring episodes
+under the automatic policy. The default is six weeks.}
 
 \item{workspace}{Optional workspace. When supplied, the immutable assessment
 is appended to and saves the patient record.}
