@@ -36,8 +36,8 @@ lator_endpoint_set(
 A versioned `lator_endpoint` with kind `"multi_endpoint"`.
 }
 \description{
-Candidate regimens are first screened against component-specific posterior
-chance constraints. Remaining candidates are ranked by expected normalized
+Candidate regimens are first screened against component-specific
+conditional-draw chance constraints. Remaining candidates are ranked by expected normalized
 clinical utility and annotated with joint target attainment and Pareto
 status. The component weights and thresholds are explicit, versioned
 clinical inputs rather than hidden application defaults.

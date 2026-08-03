@@ -38,8 +38,19 @@ lator_regimen_candidates <- function(amounts, intervals, routes = "oral",
 .lator_sample_mvn <- function(mean, covariance, n) {
   mean <- as.numeric(mean); covariance <- as.matrix(covariance)
   if (!length(mean)) return(matrix(numeric(), n, 0L))
+  if (!identical(dim(covariance), c(length(mean), length(mean))) ||
+      any(!is.finite(covariance))) {
+    .lator_stop("ETA covariance must be a finite square matrix matching the ETA mean.")
+  }
   covariance <- (covariance + t(covariance)) / 2
   eig <- eigen(covariance, symmetric = TRUE)
+  scale <- max(1, max(abs(eig$values)))
+  if (min(eig$values) < -sqrt(.Machine$double.eps) * scale) {
+    .lator_stop(
+      "ETA covariance is not positive semidefinite; regimen uncertainty ",
+      "simulation was stopped instead of silently truncating negative eigenvalues."
+    )
+  }
   root <- eig$vectors %*% diag(sqrt(pmax(eig$values, 0)), length(mean))
   matrix(stats::rnorm(n * length(mean)), n, length(mean)) %*% t(root) +
     matrix(mean, n, length(mean), byrow = TRUE)
@@ -143,9 +154,9 @@ lator_regimen_candidates <- function(amounts, intervals, routes = "oral",
   do.call(rbind, pieces)
 }
 
-.lator_prediction_cycle_statistics <- function(predictions) {
+.lator_prediction_cycle_statistics <- function(predictions, value_column = NULL) {
   predictions <- as.data.frame(predictions)
-  columns <- .lator_prediction_columns(predictions)
+  columns <- .lator_prediction_columns(predictions, value_column)
   predictions$.time <- suppressWarnings(as.numeric(predictions[[columns$time]]))
   predictions$.value <- suppressWarnings(as.numeric(predictions[[columns$value]]))
   predictions$.sim <- if ("SIM" %in% names(predictions)) {
@@ -261,18 +272,18 @@ lator_regimen_candidates <- function(amounts, intervals, routes = "oral",
 
 .lator_regimen_endpoint_evaluate <- function(
     endpoint, transition_predictions, steady_predictions, patient,
-    transition_interval, steady_interval) {
+    transition_interval, steady_interval, value_column = NULL) {
   endpoint <- lator_endpoint_validate(endpoint)
   if (!identical(endpoint$kind, "multi_endpoint")) {
     if (.lator_steady_state_endpoint(endpoint)) {
       return(lator_endpoint_evaluate(
         endpoint, steady_predictions, patient = patient,
-        interval = steady_interval
+        interval = steady_interval, value_column = value_column
       ))
     }
     return(lator_endpoint_evaluate(
       endpoint, transition_predictions, patient = patient,
-      interval = transition_interval
+      interval = transition_interval, value_column = value_column
     ))
   }
   evaluations <- lapply(endpoint$rules$components, function(component) {
@@ -280,12 +291,12 @@ lator_regimen_candidates <- function(amounts, intervals, routes = "oral",
     if (.lator_steady_state_endpoint(nested)) {
       lator_endpoint_evaluate(
         nested, steady_predictions, patient = patient,
-        interval = steady_interval
+        interval = steady_interval, value_column = value_column
       )
     } else {
       lator_endpoint_evaluate(
         nested, transition_predictions, patient = patient,
-        interval = transition_interval
+        interval = transition_interval, value_column = value_column
       )
     }
   })
@@ -365,19 +376,22 @@ lator_regimen_candidates <- function(amounts, intervals, routes = "oral",
   )
 }
 
-#' Compare candidate regimens under posterior uncertainty
+#' Compare candidate regimens under conditional individual uncertainty
 #'
-#' The complete dosing history is replayed for every posterior draw so that
+#' The complete dosing history is replayed for every conditional ETA draw so that
 #' accumulated compartment amounts are retained. Parameter uncertainty is
-#' evaluated in one batched C++ simulation call per candidate.
+#' evaluated in one batched C++ simulation call per candidate. These draws use
+#' the individual's Laplace approximation conditional on the selected model and
+#' fitted population parameters; they do not include population-parameter or
+#' model-structure uncertainty.
 #'
 #' @param assessment A completed `lator_assessment`.
 #' @param patient The corresponding patient timeline.
 #' @param candidates Candidate data frame from [lator_regimen_candidates()].
 #' @param endpoint Endpoint or versioned multi-endpoint objective to optimise;
 #'   defaults to the assessment endpoint. Multi-endpoint components are
-#'   evaluated on shared posterior draws.
-#' @param nsim Number of posterior draws.
+#'   evaluated on shared conditional ETA draws.
+#' @param nsim Number of conditional ETA draws.
 #' @param grid_step Prediction-grid spacing in hours.
 #' @param start_time First candidate dose time; defaults just after the latest
 #'   historical event visible to the assessment.
@@ -475,6 +489,7 @@ lator_regimen_optimise <- function(assessment, patient, candidates,
       residual = isTRUE(residual),
       nsim = 1L, n_cores = n_cores
     )
+    endpoint_value_column <- if (isTRUE(residual)) "DV" else "IPRED"
     prediction_id <- as.character(predictions$ID)
     transition_predictions <- predictions[
       grepl("^TRANS", prediction_id) &
@@ -493,14 +508,16 @@ lator_regimen_optimise <- function(assessment, patient, candidates,
     ))
     transition_evaluation <- lator_endpoint_evaluate(
       endpoint, transition_predictions, patient = patient,
-      interval = c(start_time, start_time + candidate$horizon)
+      interval = c(start_time, start_time + candidate$horizon),
+      value_column = endpoint_value_column
     )
     steady_evaluation <- lator_endpoint_evaluate(
       endpoint, steady_predictions, patient = patient,
-      interval = c(start_time, start_time + candidate$interval)
+      interval = c(start_time, start_time + candidate$interval),
+      value_column = endpoint_value_column
     )
     steady_metrics <- .lator_prediction_cycle_statistics(
-      steady_predictions
+      steady_predictions, value_column = endpoint_value_column
     )
     steady_summary <- .lator_metric_summary(
       steady_metrics, target = target
@@ -517,7 +534,9 @@ lator_regimen_optimise <- function(assessment, patient, candidates,
     last_cycle <- .lator_last_complete_cycle(
       transition_predictions, candidate, start_time
     )
-    last_cycle_metrics <- .lator_prediction_cycle_statistics(last_cycle)
+    last_cycle_metrics <- .lator_prediction_cycle_statistics(
+      last_cycle, value_column = endpoint_value_column
+    )
     convergence <- .lator_horizon_convergence(
       last_cycle_metrics, steady_metrics, profile_type = profile_type
     )
@@ -528,7 +547,7 @@ lator_regimen_optimise <- function(assessment, patient, candidates,
       ),
       steady_interval = c(
         start_time, start_time + candidate$interval
-      )
+      ), value_column = endpoint_value_column
     )
     is_multi <- identical(endpoint$kind, "multi_endpoint")
     expected_utility <- if (is_multi) {
@@ -569,6 +588,7 @@ lator_regimen_optimise <- function(assessment, patient, candidates,
     trajectories[[index]] <- list(
       candidate = candidate,
       predictions = transition_predictions,
+      endpoint_value_column = endpoint_value_column,
       evaluation = decision_evaluation,
       transition_evaluation = transition_evaluation,
       steady_state = list(
@@ -634,7 +654,12 @@ lator_regimen_optimise <- function(assessment, patient, candidates,
     assessment_id = assessment$assessment_id, endpoint = endpoint,
     summary = summary, trajectories = trajectories,
     start_time = start_time,
-    uncertainty = list(nsim = nsim, residual = isTRUE(residual), seed = seed),
+    uncertainty = list(
+      nsim = nsim, residual = isTRUE(residual), seed = seed,
+      scope = if (isTRUE(residual)) {
+        "conditional ETA Laplace approximation plus residual observation variability"
+      } else "conditional ETA Laplace approximation"
+    ),
     generated_at = .lator_now(), research_only = TRUE
   ), class = "lator_regimen_comparison")
 }
@@ -642,18 +667,20 @@ lator_regimen_optimise <- function(assessment, patient, candidates,
 #' Create an explicit future prediction for a selected regimen
 #'
 #' Regimen comparison already simulates every feasible candidate under the
-#' patient's posterior uncertainty. This function promotes one of those
+#' patient's conditional ETA uncertainty. This function promotes one of those
 #' candidate trajectories into a separate, auditable forecast artifact instead
 #' of repeating the expensive simulation or treating the highest-ranked row as
 #' an automatic dosing decision.
 #'
 #' @param comparison Result from [lator_regimen_optimise()].
 #' @param candidate_id Candidate selected by the user.
-#' @param probs Three ordered posterior probabilities used for the lower
+#' @param probs Three ordered conditional probabilities used for the lower
 #'   interval, median, and upper interval. The interval reflects uncertainty
-#'   in the individual's ETA posterior; it excludes residual measurement
-#'   variability and is not a confidence interval for a population mean.
-#' @return A `lator_future_prediction` containing pointwise posterior
+#'   in the individual's conditional ETA approximation. Residual variability is
+#'   included only when requested during regimen comparison; population-parameter
+#'   and model-structure uncertainty are excluded. It is not a confidence
+#'   interval for a population mean.
+#' @return A `lator_future_prediction` containing pointwise conditional
 #'   prediction intervals, their uncertainty definition, the selected regimen,
 #'   its endpoint evaluation, and native-unit numerical outcome intervals for
 #'   every endpoint component.
@@ -679,7 +706,7 @@ lator_regimen_predict <- function(comparison, candidate_id,
       !isTRUE(summary_row$decision_eligible[[1L]])) {
     .lator_stop(
       "The selected regimen does not satisfy the endpoint set's hard ",
-      "posterior constraints."
+      "conditional-draw probability constraints."
     )
   }
 
@@ -693,7 +720,9 @@ lator_regimen_predict <- function(comparison, candidate_id,
   }
   trajectory <- comparison$trajectories[[location]]
   predictions <- as.data.frame(trajectory$predictions)
-  columns <- .lator_prediction_columns(predictions)
+  value_column <- trajectory$endpoint_value_column %||%
+    if (isTRUE(comparison$uncertainty$residual)) "DV" else "IPRED"
+  columns <- .lator_prediction_columns(predictions, value_column)
   time <- as.numeric(predictions[[columns$time]])
   prediction <- as.numeric(predictions[[columns$value]])
   keep <- is.finite(time) & is.finite(prediction)
@@ -719,7 +748,9 @@ lator_regimen_predict <- function(comparison, candidate_id,
   )
   steady_forecast <- data.frame()
   if (nrow(steady_predictions)) {
-    steady_columns <- .lator_prediction_columns(steady_predictions)
+    steady_columns <- .lator_prediction_columns(
+      steady_predictions, value_column
+    )
     steady_time <- as.numeric(steady_predictions[[steady_columns$time]])
     steady_value <- as.numeric(steady_predictions[[steady_columns$value]])
     steady_keep <- is.finite(steady_time) & is.finite(steady_value)
@@ -754,10 +785,17 @@ lator_regimen_predict <- function(comparison, candidate_id,
     forecast = forecast,
     interval_probabilities = probs,
     uncertainty = list(
-      interval_type = "pointwise_posterior_prediction",
-      sources = "individual_eta_posterior",
-      residual_measurement_variability = FALSE,
+      interval_type = "pointwise_conditional_prediction_interval",
+      sources = if (isTRUE(comparison$uncertainty$residual)) {
+        c("conditional_eta_laplace_approximation", "residual_observation_variability")
+      } else "conditional_eta_laplace_approximation",
+      residual_measurement_variability = isTRUE(comparison$uncertainty$residual),
       population_parameter_uncertainty = FALSE,
+      model_structure_uncertainty = FALSE,
+      interpretation = paste(
+        "Conditional on the fitted population parameters and selected model;",
+        "this is not a full Bayesian posterior predictive interval."
+      ),
       probabilities = probs
     ),
     target = target,

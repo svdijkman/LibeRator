@@ -203,7 +203,7 @@
   # distinct from LOCF at the exact time, which correctly selects the new value.
   prechange <- data$.LATOR_ROLE == "prechange"
   if (any(prechange) && length(measured_covariates)) for (name in measured_covariates) {
-    policy <- covariate_policies[[name]] %||% covariate_policies[[toupper(name)]] %||% list(method = "locf")
+    policy <- covariate_policies[[name]] %||% covariate_policies[[toupper(name)]] %||% list(method = "none")
     earlier <- do.call(lator_covariate_at, c(
       list(patient = patient, name = name, times = data$TIME[prechange] - sqrt(.Machine$double.eps), cutoff = cutoff),
       policy
@@ -223,12 +223,31 @@
                                           process_covariance = NULL) {
   base <- .lator_omega_matrix(model)
   if (!nrow(base)) return(base)
-  process <- if (is.null(process_covariance)) base * .lator_number(process_scale, "process_scale") else as.matrix(process_covariance)
+  process_scale <- .lator_number(process_scale, "process_scale")
+  if (process_scale < 0) .lator_stop("`process_scale` must be non-negative.")
+  process <- if (is.null(process_covariance)) {
+    base * process_scale
+  } else as.matrix(process_covariance)
   if (!identical(dim(process), dim(base)) || any(!is.finite(process))) {
     .lator_stop("`process_covariance` must match the model OMEGA dimensions.")
   }
-  if (min(eigen((process + t(process)) / 2, symmetric = TRUE, only.values = TRUE)$values) < -1e-10) {
+  scale <- max(1, max(abs(process)))
+  tolerance <- 1e-10 * scale
+  if (max(abs(process - t(process))) > tolerance) {
+    .lator_stop("`process_covariance` must be symmetric.")
+  }
+  process <- (process + t(process)) / 2
+  decomposition <- eigen(process, symmetric = TRUE)
+  original_eigenvalues <- decomposition$values
+  if (min(original_eigenvalues) < -tolerance) {
     .lator_stop("`process_covariance` must be positive semidefinite.")
+  }
+  repaired <- any(original_eigenvalues < 0)
+  if (repaired) {
+    process <- decomposition$vectors %*%
+      diag(pmax(original_eigenvalues, 0), nrow = length(original_eigenvalues)) %*%
+      t(decomposition$vectors)
+    process <- (process + t(process)) / 2
   }
   output <- matrix(0, model$n_eta * occasions, model$n_eta * occasions)
   for (left in seq_len(occasions)) for (right in seq_len(occasions)) {
@@ -236,6 +255,16 @@
     columns <- (right - 1L) * model$n_eta + seq_len(model$n_eta)
     output[rows, columns] <- base + (min(left, right) - 1L) * process
   }
+  attr(output, "process_covariance_diagnostics") <- list(
+    source = if (is.null(process_covariance)) "OMEGA multiplied by process_scale" else
+      "explicit process_covariance",
+    process_scale = process_scale,
+    original_eigenvalues = original_eigenvalues,
+    repaired = repaired,
+    repair = if (repaired) "round-off eigenvalue clipping" else "none",
+    tolerance = tolerance,
+    adjustment_norm = if (repaired) sqrt(sum(pmin(original_eigenvalues, 0)^2)) else 0
+  )
   output
 }
 
@@ -877,8 +906,15 @@
 #'   `state_boundary` events are used.
 #' @param covariate_policies Named per-covariate policy lists passed to
 #'   [lator_covariate_at()].
-#' @param process_scale Random-walk innovation covariance as a multiple of OMEGA.
-#' @param process_covariance Optional explicit innovation covariance.
+#' @param process_scale Non-negative random-walk innovation covariance as a
+#'   multiple of OMEGA. Zero holds ETAs constant across declared states;
+#'   `0.1` means each state-to-state innovation has covariance `0.1 * OMEGA`.
+#'   This is a longitudinal smoothness assumption, not an estimated quantity,
+#'   and should be sensitivity-tested over clinically plausible values.
+#' @param process_covariance Optional explicit symmetric positive-semidefinite
+#'   innovation covariance. Material indefiniteness is rejected. Eigenvalues
+#'   negative only within the recorded floating-point tolerance are clipped to
+#'   zero and reported in assessment diagnostics.
 #' @param profile_population_draws Number of deterministic low-discrepancy
 #'   OMEGA draws used for the similar-patient population prediction interval.
 #'   Set to zero to disable the interval.
@@ -996,6 +1032,10 @@ lator_assess <- function(patient, model, endpoint, analyte = endpoint$drug,
     error = function(error) list(error = conditionMessage(error))
   )
   input_hashes <- .lator_assessment_input_hashes(patient, analyte)
+  provenance <- attr(model, "library_provenance", exact = TRUE) %||% list()
+  process_diagnostics <- if (mode == "dynamic") {
+    attr(fit_arguments$prior_covariance, "process_covariance_diagnostics", exact = TRUE)
+  } else NULL
   assessment <- structure(list(
     schema = "liberator.assessment", version = 1L, assessment_id = .lator_id("assessment"),
     patient_id = patient$patient_id, patient_revision = patient$revision,
@@ -1004,14 +1044,21 @@ lator_assess <- function(patient, model, endpoint, analyte = endpoint$drug,
     medication_hash = input_hashes$medication_hash,
     tdm_hash = input_hashes$tdm_hash,
     patient_context_hash = input_hashes$patient_context_hash,
-    model_hash = .lator_hash(model), endpoint_hash = .lator_hash(endpoint),
+    model_hash = .lator_hash(model),
+    model_registry_id = as.character(provenance$library_id %||% "")[[1L]],
+    model_version = as.character(provenance$library_version %||% "")[[1L]],
+    model_content_hash = .lator_hash(prepared_model),
+    endpoint_hash = .lator_hash(endpoint),
     policy_hash = .lator_hash(covariate_policies), endpoint = endpoint,
-    model_provenance = attr(model, "library_provenance", exact = TRUE) %||% list(),
+    model_provenance = provenance,
     eta = fit$eta, eta_covariance = fit$eta_covariance, eta_trajectory = trajectory,
     individual_parameters = .lator_individual_parameters(fit),
     individual_profile = dense_profile$profile,
     individual_profile_interval = dense_profile$interval,
     predictions = fit$predictions, data = fit$data, covariate_policies = covariate_policies,
+    process_scale = if (mode == "dynamic") as.numeric(process_scale) else NULL,
+    process_covariance = if (mode == "dynamic") process_covariance else NULL,
+    process_covariance_diagnostics = process_diagnostics,
     profile_observation_scope = profile_observation_scope,
     profile_observation_count = as.integer(profile_observation_count),
     profile_observation_since = profile_observation_since,
@@ -1040,6 +1087,7 @@ lator_assess <- function(patient, model, endpoint, analyte = endpoint$drug,
 #' @export
 print.lator_assessment <- function(x, ...) {
   cat("LibeRator patient assessment\n")
+  cat("  status: RESEARCH ONLY; requires qualified human review\n")
   cat("  id:", x$assessment_id, " mode:", x$mode, " cutoff:", format(x$cutoff), "\n")
   cat("  latent states:", length(unique(x$eta_trajectory$occasion)),
       " ETA estimates:", nrow(x$eta_trajectory), " convergence:", x$convergence, "\n")

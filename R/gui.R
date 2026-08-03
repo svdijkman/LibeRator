@@ -1256,6 +1256,28 @@ lator_gui <- function(workspace = NULL, path = NULL, passphrase = NULL, key = NU
           observation_since <- suppressWarnings(as.numeric(
             event$profile_observation_since %||% NA_real_
           ))
+          covariate_method <- match.arg(
+            as.character(event$covariate_method %||% "none"),
+            c("none", "locf")
+          )
+          covariate_max_age <- suppressWarnings(as.numeric(
+            event$covariate_max_age %||% 720
+          ))
+          if (identical(covariate_method, "locf") &&
+              (!is.finite(covariate_max_age) || covariate_max_age <= 0)) {
+            .lator_stop("LOCF requires a positive finite maximum covariate age.")
+          }
+          model_covariates <- as.character(
+            state$models[[state$model_id]]$COVARIATES %||% character()
+          )
+          covariate_policies <- stats::setNames(lapply(
+            model_covariates, function(name) list(
+              method = covariate_method,
+              max_age = if (identical(covariate_method, "locf")) {
+                covariate_max_age
+              } else Inf
+            )
+          ), model_covariates)
           .liber_shared_task_start(
             tasks, "LibeRator", ".lator_gui_background_task",
             args = list(
@@ -1266,6 +1288,7 @@ lator_gui <- function(workspace = NULL, path = NULL, passphrase = NULL, key = NU
                 endpoint = endpoint,
                 mode = assessment_mode,
                 process_scale = as.numeric(event$process_scale %||% 0.1),
+                covariate_policies = covariate_policies,
                 profile_observation_scope = observation_scope,
                 profile_observation_count = observation_count,
                 profile_observation_since = observation_since
@@ -1313,7 +1336,8 @@ lator_gui <- function(workspace = NULL, path = NULL, passphrase = NULL, key = NU
                 patient = patient,
                 candidates = candidates,
                 nsim = as.integer(event$nsim %||% 100L),
-                grid_step = as.numeric(event$grid_step %||% 0.5)
+                grid_step = as.numeric(event$grid_step %||% 0.5),
+                residual = isTRUE(event$residual)
               )
             ),
             label = "Candidate regimen comparison",

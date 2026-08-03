@@ -46,9 +46,16 @@ created with [lator_endpoint_set()].}
 \item{covariate_policies}{Named per-covariate policy lists passed to
 [lator_covariate_at()].}
 
-\item{process_scale}{Random-walk innovation covariance as a multiple of OMEGA.}
+\item{process_scale}{Non-negative random-walk innovation covariance as a
+multiple of OMEGA. Zero holds ETAs constant across declared states;
+`0.1` means each state-to-state innovation has covariance `0.1 * OMEGA`.
+This is a longitudinal smoothness assumption, not an estimated quantity,
+and should be sensitivity-tested over clinically plausible values.}
 
-\item{process_covariance}{Optional explicit innovation covariance.}
+\item{process_covariance}{Optional explicit symmetric positive-semidefinite
+innovation covariance. Material indefiniteness is rejected. Eigenvalues
+negative only within the recorded floating-point tolerance are clipped to
+zero and reported in assessment diagnostics.}
 
 \item{profile_population_draws}{Number of deterministic low-discrepancy
 OMEGA draws used for the similar-patient population prediction interval.

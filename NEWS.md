@@ -1,8 +1,29 @@
+# LibeRator 0.4.0
+
+- Makes endpoint governance executable: `qualified` endpoints require a scoped
+  issuer/reviewer/evidence attestation and an explicit research-use
+  acknowledgement.
+- Defaults missing-covariate handling to no imputation, aligns MIC evidence to
+  assessment time, and imposes a finite default maximum age on MIC-dependent
+  endpoints. A stale-evidence override requires an actor and reason and is
+  retained in the assessment audit record.
+- Corrects residual-enabled target evaluation to use simulated DV, and labels
+  MAP/Laplace forecast bands as conditional prediction intervals rather than
+  full Bayesian posterior predictive intervals.
+- Exposes endpoint-specific MIC freshness in the GUI and propagates audited
+  freshness decisions through combined endpoint assessments.
+
 # LibeRator 0.3.5
 
 - Uses the shared LibeRation native NCA backend for individual and candidate
   regimen AUC, average steady-state concentration, peak, trough, and fluctuation
   summaries while retaining a defensive fallback for non-evaluable profiles.
+- Bounds active assessment history and moves older assessments into individually
+  encrypted archives with a tamper-evident index. `lator_assessment_history()`
+  retrieves and verifies active and archived records.
+- Durable assessments now retain model registry id, version, and content hash
+  instead of repeatedly embedding the full model; time-varying ETA assessments
+  validate and record their process-covariance and `process_scale` provenance.
 
 # LibeRator 0.3.4
 

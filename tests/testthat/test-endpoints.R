@@ -7,6 +7,30 @@ test_that("AED endpoints target the supplied range midpoint", {
   expect_equal(endpoint$rules$target, 15)
 })
 
+test_that("qualified endpoints require an explicit governance attestation", {
+  expect_error(
+    lator_endpoint_aed(
+      "Drug A", 10, 20, "mg/L", "Protocol", status = "qualified"
+    ),
+    "qualification_attestation"
+  )
+  metadata <- list(
+    research_acknowledged = TRUE,
+    qualification_attestation = list(
+      issuer = "Institutional governance board",
+      reviewer = "Qualified reviewer",
+      reviewed_at = "2026-08-02T00:00:00Z",
+      evidence = "approved-protocol-v1",
+      scope = "Drug A research workflow"
+    )
+  )
+  endpoint <- lator_endpoint_aed(
+    "Drug A", 10, 20, "mg/L", "Protocol", status = "qualified",
+    metadata = metadata
+  )
+  expect_equal(endpoint$status, "qualified")
+})
+
 test_that("multi-endpoint objectives preserve joint posterior dependence", {
   primary <- lator_endpoint(
     "drug-a-efficacy", "Drug A efficacy", "Drug A",
@@ -188,6 +212,33 @@ test_that("beta-lactam endpoint resolves longitudinal MIC", {
   expect_match(outcome$target, "40")
 })
 
+test_that("endpoint MIC freshness is finite and overrides are audited", {
+  patient <- lator_patient_new("MIC-FRESHNESS")
+  patient <- lator_patient_add_event(
+    patient, "covariate", 0, "MIC", 2, "mg/L"
+  )
+  endpoint <- lator_endpoint_beta_lactam(
+    "Example beta-lactam", 0.4, mic_max_age = 24,
+    source = "teaching source"
+  )
+  predictions <- data.frame(TIME = c(48, 49, 50), IPRED = c(4, 2, 0))
+  expect_error(
+    lator_endpoint_evaluate(endpoint, predictions, patient),
+    "freshness_override"
+  )
+  evaluated <- lator_endpoint_evaluate(
+    endpoint, predictions, patient,
+    freshness_override = list(
+      actor = "Teaching reviewer", reason = "Synthetic override test"
+    )
+  )
+  expect_length(evaluated$covariate_freshness, 1L)
+  expect_equal(
+    evaluated$covariate_freshness[[1L]]$override$actor,
+    "Teaching reviewer"
+  )
+})
+
 test_that("ATG endpoints validate explicit pre-event windows", {
   targets <- data.frame(window_start = c(-24, -6), window_end = c(-18, 0),
                         lower = c(1, 2), upper = c(3, 4))
@@ -342,6 +393,39 @@ test_that("AUC/MIC and composite antimicrobial endpoints evaluate trajectories",
   )
   expect_equal(amino$median_metric, 10)
   expect_equal(amino$attainment_probability, 1)
+})
+
+test_that("time-varying MIC is aligned pointwise instead of collapsed", {
+  patient <- lator_patient_new("ANTIMICROBIAL-002")
+  patient <- lator_patient_add_event(patient, "covariate", 0, "MIC", 1, "mg/L")
+  patient <- lator_patient_add_event(patient, "covariate", 1, "MIC", 2, "mg/L")
+  endpoint <- lator_endpoint_vancomycin(
+    lower = 0, upper = 100, source = "Test protocol"
+  )
+  evaluated <- lator_endpoint_evaluate(
+    endpoint, data.frame(TIME = c(0, 1, 2), IPRED = c(10, 10, 10)),
+    patient
+  )
+  expect_equal(
+    evaluated$median_metric, 5 / log(2) + 5, tolerance = 1e-8
+  )
+})
+
+test_that("an explicit residualised endpoint evaluation uses DV", {
+  endpoint <- lator_endpoint_aed(
+    "testdrug", 18, 22, "mg/L", "Test protocol"
+  )
+  predictions <- data.frame(
+    TIME = c(0, 1), IPRED = c(10, 10), DV = c(20, 20)
+  )
+  expect_equal(
+    lator_endpoint_evaluate(endpoint, predictions)$attainment_probability, 0
+  )
+  residualised <- lator_endpoint_evaluate(
+    endpoint, predictions, value_column = "DV"
+  )
+  expect_equal(residualised$attainment_probability, 1)
+  expect_equal(residualised$median_metric, 20)
 })
 
 test_that("transplant, timed-clearance, and response endpoints are executable", {

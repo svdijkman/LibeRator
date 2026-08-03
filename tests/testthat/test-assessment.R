@@ -47,6 +47,69 @@ test_that("static and dynamic assessments use the C++ individual objective", {
   expect_equal(unique(dynamic$eta_trajectory$occasion), 1:2)
   expect_true(any(dynamic$data$.LATOR_ROLE == "prechange"))
   expect_true(any(dynamic$data$.LATOR_ROLE == "postchange"))
+  expect_equal(dynamic$process_scale, 0.2)
+  expect_false(dynamic$process_covariance_diagnostics$repaired)
+})
+
+test_that("dynamic process scale is explicit and round-off repair is audited", {
+  model <- lator_test_model()
+  fixed <- .lator_random_walk_covariance(model, 2L, process_scale = 0)
+  flexible <- .lator_random_walk_covariance(model, 2L, process_scale = 0.5)
+  expect_equal(fixed[2, 2], fixed[1, 1])
+  expect_equal(flexible[2, 2] - flexible[1, 1], 0.5 * model$OMEGAS$Value[[1L]])
+
+  clipped <- .lator_random_walk_covariance(
+    model, 2L, process_covariance = matrix(-1e-12, 1L, 1L)
+  )
+  diagnostics <- attr(clipped, "process_covariance_diagnostics", exact = TRUE)
+  expect_true(diagnostics$repaired)
+  expect_identical(diagnostics$repair, "round-off eigenvalue clipping")
+  expect_equal(diagnostics$original_eigenvalues, -1e-12)
+  expect_error(
+    .lator_random_walk_covariance(
+      model, 2L, process_covariance = matrix(-1e-4, 1L, 1L)
+    ),
+    "positive semidefinite"
+  )
+})
+
+test_that("assessment history is bounded, archived, and model-reference based", {
+  old <- getOption("LibeRator.assessment_history_limit")
+  on.exit(options(LibeRator.assessment_history_limit = old), add = TRUE)
+  options(LibeRator.assessment_history_limit = 2L)
+  workspace <- lator_workspace(
+    tempfile("lator-assessment-archive-"),
+    "assessment archive test passphrase"
+  )
+  patient <- lator_test_patient()
+  endpoint <- lator_endpoint_aed("Drug A", 1, 4, "mg/L", "teaching source")
+  base <- lator_assess(patient, lator_test_model(), endpoint)
+  assessments <- lapply(seq_len(3L), function(index) {
+    value <- base
+    value$assessment_id <- paste0("assessment-test-", index)
+    value$created_at <- sprintf("2026-08-02T00:00:0%dZ", index)
+    value$assessment_hash <- .lator_hash(value)
+    value
+  })
+  patient$assessments <- assessments
+  saved <- lator_patient_save(workspace, patient)
+  expect_length(saved$assessments, 2L)
+  expect_length(saved$assessment_archive, 1L)
+  expect_true(inherits(saved$assessments[[1L]]$model, "nm_model"))
+
+  stored <- .lator_encrypt_read(
+    .lator_patient_path(workspace, patient$patient_id), workspace$key
+  )
+  expect_null(stored$assessments[[1L]]$model)
+  expect_true(nzchar(stored$assessments[[1L]]$model_reference$registry_id))
+  expect_true(nzchar(stored$assessments[[1L]]$model_reference$content_hash))
+  history <- lator_assessment_history(
+    workspace, patient$patient_id, include_archived = TRUE
+  )
+  expect_length(history, 3L)
+  expect_true(all(vapply(
+    history, function(item) inherits(item$model, "nm_model"), logical(1)
+  )))
 })
 
 test_that("readiness tracks which inputs changed after individualisation", {
@@ -262,11 +325,11 @@ test_that("regimen comparison is ranked under posterior uncertainty", {
   expect_true(all(forecast$forecast$median <= forecast$forecast$upper))
   expect_identical(
     forecast$uncertainty$interval_type,
-    "pointwise_posterior_prediction"
+    "pointwise_conditional_prediction_interval"
   )
   expect_identical(
     forecast$uncertainty$sources,
-    "individual_eta_posterior"
+    "conditional_eta_laplace_approximation"
   )
   expect_false(forecast$uncertainty$residual_measurement_variability)
   expect_false(forecast$uncertainty$population_parameter_uncertainty)
@@ -361,6 +424,16 @@ test_that("candidate dose covariates follow the proposed regimen", {
   expect_equal(updated$CBZ_DAILY_DOSE, c(400, 400))
 })
 
+test_that("regimen draws reject a materially non-PSD ETA covariance", {
+  expect_error(
+    .lator_sample_mvn(c(0, 0), matrix(c(1, 2, 2, 1), 2, 2), 10),
+    "not positive semidefinite"
+  )
+  expect_silent(
+    .lator_sample_mvn(c(0, 0), matrix(c(1, 0, 0, -1e-16), 2, 2), 10)
+  )
+})
+
 test_that("direct models are only labelled mean-only when time invariant", {
   model <- lator_test_model()
   model$SOLVER <- "direct"
@@ -418,7 +491,8 @@ test_that("Rivas steady-state individualisation agrees with AEDapt reference", {
     lator_endpoint_aed(
       "lamotrigine", 4, 12, "mg/L", "AEDapt parity scenario"
     ),
-    maxit = 100
+    maxit = 100,
+    covariate_policies = list(WT = list(method = "locf"))
   )
   expect_equal(assessment$eta[[1L]], -1.1010, tolerance = 5e-4)
   expect_equal(

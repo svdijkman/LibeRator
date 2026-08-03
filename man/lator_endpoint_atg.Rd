@@ -10,7 +10,8 @@ lator_endpoint_atg(
   unit,
   source,
   anchor = "transplantation",
-  status = c("draft", "reviewed", "qualified")
+  status = c("draft", "reviewed", "qualified"),
+  metadata = list()
 )
 }
 \arguments{
@@ -26,6 +27,8 @@ lator_endpoint_atg(
 \item{anchor}{Patient procedure-event name used as time zero.}
 
 \item{status}{Governance status.}
+
+\item{metadata}{Additional metadata.}
 }
 \description{
 ATG pre-transplant target endpoint

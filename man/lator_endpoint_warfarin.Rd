@@ -10,7 +10,8 @@ lator_endpoint_warfarin(
   target_fraction,
   source,
   drug = "warfarin",
-  status = c("draft", "reviewed", "qualified")
+  status = c("draft", "reviewed", "qualified"),
+  metadata = list()
 )
 }
 \arguments{
@@ -23,6 +24,8 @@ lator_endpoint_warfarin(
 \item{drug}{Intervention name.}
 
 \item{status}{Governance status.}
+
+\item{metadata}{Additional metadata.}
 }
 \description{
 Warfarin INR time-in-range endpoint

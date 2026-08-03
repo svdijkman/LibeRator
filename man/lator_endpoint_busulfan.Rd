@@ -11,7 +11,8 @@ lator_endpoint_busulfan(
   source,
   doses = 1L,
   drug = "busulfan",
-  status = c("draft", "reviewed", "qualified")
+  status = c("draft", "reviewed", "qualified"),
+  metadata = list()
 )
 }
 \arguments{
@@ -26,6 +27,8 @@ lator_endpoint_busulfan(
 \item{drug}{Drug name.}
 
 \item{status}{Governance status.}
+
+\item{metadata}{Additional metadata.}
 }
 \description{
 Busulfan cumulative-AUC endpoint

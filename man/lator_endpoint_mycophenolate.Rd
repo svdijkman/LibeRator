@@ -10,7 +10,8 @@ lator_endpoint_mycophenolate(
   unit,
   source,
   drug = "mycophenolic acid",
-  status = c("draft", "reviewed", "qualified")
+  status = c("draft", "reviewed", "qualified"),
+  metadata = list()
 )
 }
 \arguments{
@@ -23,6 +24,8 @@ lator_endpoint_mycophenolate(
 \item{drug}{Drug/analyte name.}
 
 \item{status}{Governance status.}
+
+\item{metadata}{Additional metadata.}
 }
 \description{
 Mycophenolic-acid AUC endpoint

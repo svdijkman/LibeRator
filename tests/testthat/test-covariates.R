@@ -15,6 +15,21 @@ test_that("covariate policies preserve age, missingness, and fallback provenance
   expect_identical(fallback$method, "fallback")
 })
 
+test_that("model covariates are not carried forward without an explicit policy", {
+  patient <- lator_patient_new("P-NO-IMPUTE")
+  patient <- lator_patient_add_event(patient, "covariate", 0, "WT", 70, "kg")
+  implicit <- LibeRator:::.lator_resolve_covariates(
+    patient, "WT", c(0, 12), policies = list()
+  )
+  expect_equal(implicit$data$WT[[1L]], 70)
+  expect_true(is.na(implicit$data$WT[[2L]]))
+  explicit <- LibeRator:::.lator_resolve_covariates(
+    patient, "WT", c(0, 12),
+    policies = list(WT = list(method = "locf", max_age = 24))
+  )
+  expect_equal(explicit$data$WT, c(70, 70))
+})
+
 test_that("linear interpolation is bracketed and unit-safe", {
   patient <- lator_patient_new("P001")
   patient <- lator_patient_add_event(patient, "covariate", 0, "WT", 60, "kg")
@@ -141,7 +156,10 @@ test_that("effective-dated interaction evidence overrides treatment fallback", {
     SIGMAS = data.frame(SIGMA = 1, Value = 0.4),
     COVARIATES = "COMED_WARFARIN"
   )
-  prepared <- .lator_patient_dataset(patient, model, "Drug A")
+  prepared <- .lator_patient_dataset(
+    patient, model, "Drug A",
+    covariate_policies = list(COMED_WARFARIN = list(method = "locf"))
+  )
   expect_true(all(
     prepared$data$COMED_WARFARIN[prepared$data$TIME < 10] == 0
   ))

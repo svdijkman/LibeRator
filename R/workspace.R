@@ -50,14 +50,16 @@
 
 .lator_workspace_paths <- function(path) list(
   records = file.path(path, "records"), models = file.path(path, "models"),
-  endpoints = file.path(path, "endpoints"), locks = file.path(path, ".locks"),
+  endpoints = file.path(path, "endpoints"),
+  assessments = file.path(path, "assessment-archive"),
+  locks = file.path(path, ".locks"),
   catalog = file.path(path, "catalog.enc"), audit = file.path(path, "audit.enc")
 )
 
 .lator_workspace_create <- function(path, passphrase = NULL, key = NULL) {
   dir.create(path, recursive = TRUE, showWarnings = FALSE)
   paths <- .lator_workspace_paths(path)
-  invisible(lapply(paths[c("records", "models", "endpoints", "locks")], dir.create,
+  invisible(lapply(paths[c("records", "models", "endpoints", "assessments", "locks")], dir.create,
                    recursive = TRUE, showWarnings = FALSE))
   kdf <- "managed-key"
   salt <- raw()
@@ -128,7 +130,7 @@ lator_workspace <- function(path = NULL, passphrase = NULL, key = NULL, create =
     .lator_workspace_create(path, passphrase = passphrase, key = key)
   } else .lator_workspace_unlock(path, passphrase = passphrase, key = key)
   paths <- .lator_workspace_paths(path)
-  invisible(lapply(paths[c("records", "models", "endpoints", "locks")], dir.create,
+  invisible(lapply(paths[c("records", "models", "endpoints", "assessments", "locks")], dir.create,
                    recursive = TRUE, showWarnings = FALSE))
   structure(list(
     schema = "liberator.workspace", version = 1L, path = path,
@@ -139,6 +141,7 @@ lator_workspace <- function(path = NULL, passphrase = NULL, key = NULL, create =
 #' @export
 print.lator_workspace <- function(x, ...) {
   cat("Encrypted LibeRator workspace\n")
+  cat("  status: RESEARCH ONLY; not clinically validated\n")
   cat("  path:", x$path, "\n")
   cat("  mode: research/teaching; pseudonymous records only\n")
   invisible(x)

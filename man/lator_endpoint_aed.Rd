@@ -11,7 +11,8 @@ lator_endpoint_aed(
   unit,
   source,
   status = c("draft", "reviewed", "qualified"),
-  metric = "last_interval_average"
+  metric = "last_interval_average",
+  metadata = list()
 )
 }
 \arguments{
@@ -27,6 +28,9 @@ lator_endpoint_aed(
 
 \item{metric}{Prediction metric; by default average concentration over the
 last dose interval.}
+
+\item{metadata}{Additional metadata, including qualification attestation
+when `status = "qualified"`.}
 }
 \description{
 The optimisation target is the midpoint of the supplied range. No drug

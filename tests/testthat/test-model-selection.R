@@ -52,7 +52,16 @@ lator_selection_patient <- function(weight = 70) {
 test_that("qualified model selection gates before ranking and is reproducible", {
   endpoint <- lator_endpoint_aed(
     "Drug A", 2, 8, "mg/L", "Institutional protocol",
-    status = "qualified"
+    status = "qualified",
+    metadata = list(
+      research_acknowledged = TRUE,
+      qualification_attestation = list(
+        issuer = "Fixture governance board", reviewer = "Fixture reviewer",
+        reviewed_at = "2026-08-02T00:00:00Z",
+        evidence = "fixture-protocol-v1",
+        scope = "Synthetic model-selection test"
+      )
+    )
   )
   candidates <- list(
     lator_test_qualification("oral"),
@@ -137,20 +146,29 @@ test_that("model-selection decisions are retained on the encrypted patient", {
 })
 
 test_that("multi-endpoint model selection requires qualification for every component", {
+  qualification_metadata <- list(
+    research_acknowledged = TRUE,
+    qualification_attestation = list(
+      issuer = "Fixture governance board", reviewer = "Fixture reviewer",
+      reviewed_at = "2026-08-02T00:00:00Z", evidence = "fixture-protocol-v1",
+      scope = "Synthetic model-selection test"
+    )
+  )
   efficacy <- lator_endpoint_aed(
     "Drug A", 2, 8, "mg/L", "Institutional protocol",
-    status = "qualified"
+    status = "qualified", metadata = qualification_metadata
   )
   safety <- lator_endpoint(
     id = "drug-a-safety", name = "Drug A safety trough",
     drug = "Drug A", kind = "trough_range", metric = "trough",
     unit = "mg/L", rules = list(lower = 1, upper = 10, target = 5.5),
-    source = "Institutional protocol", status = "qualified"
+    source = "Institutional protocol", status = "qualified",
+    metadata = qualification_metadata
   )
   objective <- lator_endpoint_set(
     id = "drug-a-benefit-risk", name = "Drug A benefit-risk",
     drug = "Drug A", source = "Institutional protocol",
-    status = "qualified",
+    status = "qualified", metadata = qualification_metadata,
     components = list(
       lator_endpoint_component(efficacy, role = "primary"),
       lator_endpoint_component(safety, role = "safety")

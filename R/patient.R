@@ -14,9 +14,11 @@
   patient$patient_id <- .lator_scalar(patient$patient_id, "patient_id", max_chars = 128L)
   patient$model_selections <- patient$model_selections %||% list()
   patient$therapies <- patient$therapies %||% list()
+  patient$assessment_archive <- patient$assessment_archive %||% list()
   if (!is.list(patient$events) || !is.list(patient$assessments) ||
-      !is.list(patient$therapies) || !is.list(patient$model_selections)) {
-    .lator_stop("Patient timelines, assessments, therapies, and model selections must be lists.")
+      !is.list(patient$assessment_archive) || !is.list(patient$therapies) ||
+      !is.list(patient$model_selections)) {
+    .lator_stop("Patient timelines, assessments, archives, therapies, and model selections must be lists.")
   }
   ids <- vapply(patient$events, function(event) as.character(event$event_id %||% ""), character(1))
   if (any(!nzchar(ids)) || anyDuplicated(ids)) .lator_stop("Patient event ids must be unique.")
@@ -49,7 +51,7 @@ lator_patient_new <- function(patient_id, study_id = "", label = "", metadata = 
     patient_id = patient_id, study_id = study_id, label = label,
     metadata = metadata, created_at = now, updated_at = now,
     events = list(), therapies = list(), assessments = list(),
-    model_selections = list(),
+    assessment_archive = list(), model_selections = list(),
     status = "active"
   ), class = "lator_patient")
 }
@@ -57,8 +59,10 @@ lator_patient_new <- function(patient_id, study_id = "", label = "", metadata = 
 #' @export
 print.lator_patient <- function(x, ...) {
   cat("LibeRator longitudinal patient\n")
+  cat("  status: RESEARCH ONLY; not clinically validated\n")
   cat("  pseudonym:", x$patient_id, " revision:", x$revision, "\n")
   cat("  events:", length(x$events), " assessments:", length(x$assessments),
+      " archived assessments:", length(x$assessment_archive %||% list()),
       " therapies:", length(x$therapies %||% list()),
       " model selections:", length(x$model_selections %||% list()), "\n")
   invisible(x)
@@ -524,6 +528,177 @@ lator_patient_add_events <- function(patient, events) {
   patient
 }
 
+.lator_assessment_registry_reference <- function(workspace, assessment,
+                                                 actor = "local-session") {
+  model <- assessment$model %||% NULL
+  reference <- assessment$model_reference %||% list()
+  if (inherits(model, "nm_model")) {
+    content_hash <- .lator_hash(model)
+    id <- paste0("assessment-", substr(content_hash, 1L, 32L))
+    token <- .lator_record_token(id, workspace$key)
+    path <- file.path(workspace$paths$models, paste0(token, ".enc"))
+    if (file.exists(path)) {
+      registration <- .lator_model_get(workspace, id)
+      if (!identical(registration$model_hash, content_hash)) {
+        .lator_stop("A registered assessment model id has conflicting content.")
+      }
+    } else {
+      provenance <- assessment$model_provenance %||% list()
+      registration <- lator_model_register(
+        workspace, model, id = id,
+        name = as.character(
+          attr(model, "name", exact = TRUE) %||%
+            provenance$title %||% provenance$library_id %||% id
+        )[[1L]],
+        qualification = list(
+          status = "research", purpose = "assessment replay",
+          source_registry_id = assessment$model_registry_id %||% "",
+          source_version = assessment$model_version %||% ""
+        ),
+        provenance = provenance, actor = actor
+      )
+    }
+    reference <- list(
+      registry_id = id,
+      registry = "LibeRator encrypted model registry",
+      version = as.character(assessment$model_version %||% "")[[1L]],
+      content_hash = content_hash,
+      selected_model_hash = assessment$model_hash %||% "",
+      source_registry_id = assessment$model_registry_id %||% "",
+      recorded_at = .lator_now()
+    )
+  }
+  if (!nzchar(as.character(reference$registry_id %||% "")) ||
+      !nzchar(as.character(reference$content_hash %||% ""))) {
+    .lator_stop(
+      "A durable assessment requires a registered model id and content hash."
+    )
+  }
+  assessment$model_reference <- reference
+  assessment$model <- NULL
+  assessment
+}
+
+.lator_patient_compact_assessments <- function(workspace, patient,
+                                               actor = "local-session") {
+  patient$assessments <- lapply(
+    patient$assessments,
+    function(assessment) .lator_assessment_registry_reference(
+      workspace, assessment, actor
+    )
+  )
+  patient
+}
+
+.lator_assessment_archive_path <- function(workspace, patient_id,
+                                           assessment_id) {
+  token <- .lator_record_token(
+    paste(patient_id, assessment_id, sep = "::"), workspace$key
+  )
+  file.path(workspace$paths$assessments, paste0(token, ".enc"))
+}
+
+.lator_patient_archive_assessments <- function(workspace, patient) {
+  limit <- as.integer(getOption("LibeRator.assessment_history_limit", 20L))
+  if (length(limit) != 1L || is.na(limit) || limit < 1L) {
+    .lator_stop("`LibeRator.assessment_history_limit` must be a positive integer.")
+  }
+  excess <- length(patient$assessments) - limit
+  if (excess <= 0L) return(patient)
+  archived_ids <- vapply(
+    patient$assessment_archive %||% list(),
+    function(item) as.character(item$assessment_id %||% "")[[1L]],
+    character(1)
+  )
+  for (assessment in patient$assessments[seq_len(excess)]) {
+    id <- as.character(assessment$assessment_id %||% "")[[1L]]
+    if (!nzchar(id)) .lator_stop("An assessment selected for archival has no id.")
+    path <- .lator_assessment_archive_path(workspace, patient$patient_id, id)
+    archive_hash <- .lator_hash(assessment)
+    if (!file.exists(path)) {
+      .lator_atomic_encrypt_save(assessment, path, workspace$key)
+    } else {
+      existing <- .lator_encrypt_read(path, workspace$key)
+      if (!identical(.lator_hash(existing), archive_hash)) {
+        .lator_stop("An archived assessment id has conflicting content.")
+      }
+    }
+    if (!id %in% archived_ids) {
+      patient$assessment_archive[[length(patient$assessment_archive) + 1L]] <- list(
+        assessment_id = id, created_at = assessment$created_at %||% "",
+        cutoff = assessment$cutoff %||% NA_real_, mode = assessment$mode %||% "",
+        analyte = assessment$analyte %||% "",
+        model_reference = assessment$model_reference %||% list(),
+        endpoint_hash = assessment$endpoint_hash %||% "",
+        archive_hash = archive_hash,
+        archived_at = .lator_now()
+      )
+      archived_ids <- c(archived_ids, id)
+    }
+  }
+  patient$assessments <- utils::tail(patient$assessments, limit)
+  patient
+}
+
+.lator_assessment_hydrate <- function(workspace, assessment) {
+  if (inherits(assessment$model %||% NULL, "nm_model")) return(assessment)
+  reference <- assessment$model_reference %||% list()
+  id <- as.character(reference$registry_id %||% "")[[1L]]
+  if (!nzchar(id)) return(assessment)
+  registration <- .lator_model_get(workspace, id)
+  if (!identical(
+    registration$model_hash %||% "", reference$content_hash %||% ""
+  )) {
+    .lator_stop("An assessment model reference failed content-hash verification.")
+  }
+  assessment$model <- registration$model
+  assessment
+}
+
+.lator_patient_hydrate_assessments <- function(workspace, patient) {
+  patient$assessments <- lapply(
+    patient$assessments,
+    function(assessment) .lator_assessment_hydrate(workspace, assessment)
+  )
+  patient
+}
+
+#' Read active and archived assessments for a patient
+#'
+#' Active assessments are stored in the encrypted patient record. Older
+#' assessments are moved to individually encrypted archive records while a
+#' compact, auditable index remains with the patient.
+#'
+#' @param workspace Unlocked workspace.
+#' @param patient_id Patient pseudonym.
+#' @param include_archived Include archived assessment records.
+#' @return A chronological list of hydrated `lator_assessment` objects.
+#' @export
+lator_assessment_history <- function(workspace, patient_id,
+                                     include_archived = TRUE) {
+  workspace <- .lator_require_workspace(workspace)
+  patient <- lator_patient_get(workspace, patient_id)
+  assessments <- patient$assessments
+  if (isTRUE(include_archived) && length(patient$assessment_archive)) {
+    archived <- lapply(patient$assessment_archive, function(index) {
+      id <- as.character(index$assessment_id %||% "")[[1L]]
+      value <- .lator_encrypt_read(
+        .lator_assessment_archive_path(workspace, patient$patient_id, id),
+        workspace$key, NULL
+      )
+      if (is.null(value) || !identical(.lator_hash(value), index$archive_hash)) {
+        .lator_stop("An archived assessment is absent or failed its content hash.")
+      }
+      .lator_assessment_hydrate(workspace, value)
+    })
+    assessments <- c(archived, assessments)
+  }
+  assessments[order(vapply(
+    assessments, function(item) as.character(item$created_at %||% ""),
+    character(1)
+  ))]
+}
+
 #' Persist a patient with optimistic revision checking
 #' @param workspace Unlocked workspace.
 #' @param patient Patient record.
@@ -537,34 +712,44 @@ lator_patient_save <- function(workspace, patient,
   workspace <- .lator_require_workspace(workspace)
   patient <- .lator_validate_patient(patient)
   expected_revision <- as.integer(expected_revision)
+  storage_patient <- .lator_patient_compact_assessments(
+    workspace, patient, actor
+  )
   .lator_with_lock(workspace, "workspace-write", function() {
-    path <- .lator_patient_path(workspace, patient$patient_id)
+    path <- .lator_patient_path(workspace, storage_patient$patient_id)
     stored <- .lator_encrypt_read(path, workspace$key, NULL)
     actual <- if (is.null(stored)) 0L else as.integer(stored$revision)
     if (!identical(actual, expected_revision)) {
       .lator_stop("Patient revision conflict: expected ", expected_revision,
                   " but the encrypted workspace contains ", actual, ".")
     }
-    patient$revision <- actual + 1L
-    patient$updated_at <- .lator_now()
-    .lator_atomic_encrypt_save(patient, path, workspace$key)
+    storage_patient <- .lator_patient_archive_assessments(
+      workspace, storage_patient
+    )
+    storage_patient$revision <- actual + 1L
+    storage_patient$updated_at <- .lator_now()
+    .lator_atomic_encrypt_save(storage_patient, path, workspace$key)
     catalog <- .lator_catalog_read(workspace)
-    catalog$patients[[patient$patient_id]] <- list(
-      patient_id = patient$patient_id, study_id = patient$study_id,
-      label = patient$label, status = patient$status,
-      revision = patient$revision, updated_at = patient$updated_at
+    catalog$patients[[storage_patient$patient_id]] <- list(
+      patient_id = storage_patient$patient_id, study_id = storage_patient$study_id,
+      label = storage_patient$label, status = storage_patient$status,
+      revision = storage_patient$revision, updated_at = storage_patient$updated_at
     )
     .lator_atomic_encrypt_save(catalog, workspace$paths$catalog, workspace$key)
     .lator_audit_append(
       workspace, if (is.null(stored)) "patient_created" else "patient_updated",
-      "patient", patient$patient_id,
-      detail = list(revision = patient$revision, event_count = length(patient$events),
-                    assessment_count = length(patient$assessments),
-                    therapy_count = length(patient$therapies %||% list()),
-                    model_selection_count = length(patient$model_selections %||% list())),
+      "patient", storage_patient$patient_id,
+      detail = list(
+        revision = storage_patient$revision,
+        event_count = length(storage_patient$events),
+        assessment_count = length(storage_patient$assessments),
+        archived_assessment_count = length(storage_patient$assessment_archive),
+        therapy_count = length(storage_patient$therapies %||% list()),
+        model_selection_count = length(storage_patient$model_selections %||% list())
+      ),
       actor = actor
     )
-    patient
+    .lator_patient_hydrate_assessments(workspace, storage_patient)
   })
 }
 
@@ -595,9 +780,18 @@ lator_patient_delete <- function(
     if (!file.exists(path)) {
       .lator_stop("Unknown patient pseudonym: ", patient_id)
     }
+    patient <- .lator_encrypt_read(path, workspace$key, NULL)
+    archive_paths <- vapply(
+      patient$assessment_archive %||% list(),
+      function(index) .lator_assessment_archive_path(
+        workspace, patient_id, index$assessment_id
+      ),
+      character(1)
+    )
     if (!isTRUE(unlink(path) == 0L) || file.exists(path)) {
       .lator_stop("Unable to delete the encrypted patient record.")
     }
+    if (length(archive_paths)) unlink(archive_paths, force = TRUE)
     catalog <- .lator_catalog_read(workspace)
     catalog$patients[[patient_id]] <- NULL
     .lator_atomic_encrypt_save(catalog, workspace$paths$catalog, workspace$key)
@@ -618,7 +812,8 @@ lator_patient_get <- function(workspace, patient_id) {
   patient_id <- .lator_scalar(patient_id, "patient_id")
   patient <- .lator_encrypt_read(.lator_patient_path(workspace, patient_id), workspace$key, NULL)
   if (is.null(patient)) .lator_stop("Unknown patient pseudonym: ", patient_id)
-  .lator_validate_patient(patient)
+  patient <- .lator_validate_patient(patient)
+  .lator_patient_hydrate_assessments(workspace, patient)
 }
 
 #' List pseudonymous patient records

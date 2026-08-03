@@ -6,6 +6,29 @@
 
 .lator_endpoint_component_roles <- c("primary", "secondary", "safety")
 
+.lator_endpoint_qualification_check <- function(status, metadata) {
+  if (!identical(status, "qualified")) return(invisible(TRUE))
+  attestation <- metadata$qualification_attestation %||% list()
+  required <- c("issuer", "reviewer", "reviewed_at", "evidence", "scope")
+  missing <- required[!vapply(required, function(field) {
+    value <- attestation[[field]] %||% ""
+    length(value) == 1L && nzchar(trimws(as.character(value)))
+  }, logical(1))]
+  reviewed_at <- suppressWarnings(as.POSIXct(
+    attestation$reviewed_at %||% NA_character_, tz = "UTC"
+  ))
+  if (length(missing) || is.na(reviewed_at) ||
+      !isTRUE(metadata$research_acknowledged)) {
+    .lator_stop(
+      "A qualified endpoint requires metadata$qualification_attestation with ",
+      "issuer, reviewer, reviewed_at, evidence, and scope, plus ",
+      "metadata$research_acknowledged = TRUE. The acknowledgement confirms ",
+      "that this LibeRator build remains research-only."
+    )
+  }
+  invisible(TRUE)
+}
+
 #' Define a versioned therapeutic endpoint
 #'
 #' Endpoint definitions are evidence-bearing data, separate from estimation and
@@ -29,6 +52,9 @@
 lator_endpoint <- function(id, name, drug, kind, metric, unit = "", rules = list(),
                            source = "", status = c("draft", "reviewed", "qualified"),
                            version = "1.0.0", metadata = list()) {
+  status <- match.arg(status)
+  if (!is.list(metadata)) .lator_stop("Endpoint metadata must be a list.")
+  .lator_endpoint_qualification_check(status, metadata)
   endpoint <- structure(list(
     schema = "liberator.endpoint", schema_version = 1L,
     id = .lator_scalar(id, "id", max_chars = 128L),
@@ -38,7 +64,7 @@ lator_endpoint <- function(id, name, drug, kind, metric, unit = "", rules = list
     metric = .lator_scalar(metric, "metric", max_chars = 128L),
     unit = .lator_scalar(unit, "unit", allow_empty = TRUE, max_chars = 64L),
     rules = rules, source = .lator_scalar(source, "source", allow_empty = TRUE, max_chars = 1000L),
-    status = match.arg(status), version = .lator_scalar(version, "version", max_chars = 32L),
+    status = status, version = .lator_scalar(version, "version", max_chars = 32L),
     metadata = metadata, created_at = .lator_now()
   ), class = "lator_endpoint")
   lator_endpoint_validate(endpoint)
@@ -54,6 +80,7 @@ lator_endpoint_validate <- function(endpoint) {
   if (!inherits(endpoint, "lator_endpoint") || !identical(endpoint$schema, "liberator.endpoint") ||
       as.integer(endpoint$schema_version) != 1L) .lator_stop("Invalid LibeRator endpoint.")
   if (!is.list(endpoint$rules) || !is.list(endpoint$metadata)) .lator_stop("Endpoint rules and metadata must be lists.")
+  .lator_endpoint_qualification_check(endpoint$status, endpoint$metadata)
   if (endpoint$kind == "multi_endpoint") {
     components <- endpoint$rules$components
     if (!is.list(components) || length(components) < 2L) {
@@ -134,6 +161,10 @@ lator_endpoint_validate <- function(endpoint) {
     upper <- .lator_number(endpoint$rules$upper, "rules$upper")
     if (lower >= upper) .lator_stop("AUC/MIC lower bound must be below its upper bound.")
     .lator_scalar(endpoint$rules$mic_variable, "rules$mic_variable")
+    endpoint$rules$mic_max_age <- .lator_number(
+      endpoint$rules$mic_max_age %||% 168, "rules$mic_max_age",
+      positive = TRUE
+    )
     if (!is.null(endpoint$rules$safety_auc_upper)) {
       .lator_number(endpoint$rules$safety_auc_upper, "rules$safety_auc_upper", positive = TRUE)
     }
@@ -150,6 +181,10 @@ lator_endpoint_validate <- function(endpoint) {
     if (!endpoint$rules$efficacy_metric %in% c("Cmax/MIC", "AUC/MIC")) {
       .lator_stop("Unknown aminoglycoside efficacy metric.")
     }
+    endpoint$rules$mic_max_age <- .lator_number(
+      endpoint$rules$mic_max_age %||% 168, "rules$mic_max_age",
+      positive = TRUE
+    )
   }
   if (endpoint$kind == "fraction_time_above_threshold") {
     fraction <- .lator_number(endpoint$rules$target_fraction, "rules$target_fraction")
@@ -159,6 +194,10 @@ lator_endpoint_validate <- function(endpoint) {
       free <- .lator_number(endpoint$rules$free_fraction, "rules$free_fraction", positive = TRUE)
       if (free > 1) .lator_stop("Free fraction cannot exceed one.")
     }
+    endpoint$rules$mic_max_age <- .lator_number(
+      endpoint$rules$mic_max_age %||% 168, "rules$mic_max_age",
+      positive = TRUE
+    )
   }
   if (endpoint$kind == "pre_event_target") {
     targets <- endpoint$rules$targets
@@ -201,7 +240,7 @@ lator_endpoint_validate <- function(endpoint) {
 #' @param weight Positive utility weight. Weights are normalized within the
 #'   endpoint set, so only their relative values matter.
 #' @param hard_constraint Whether candidate regimens must satisfy a minimum
-#'   posterior target-attainment probability for this component.
+#'   target-attainment probability across conditional ETA draws for this component.
 #' @param minimum_attainment Required probability when `hard_constraint` is
 #'   `TRUE`.
 #' @param component_id Optional stable component identifier.
@@ -238,8 +277,8 @@ lator_endpoint_component <- function(
 
 #' Combine therapeutic endpoints into a versioned clinical objective
 #'
-#' Candidate regimens are first screened against component-specific posterior
-#' chance constraints. Remaining candidates are ranked by expected normalized
+#' Candidate regimens are first screened against component-specific
+#' conditional-draw chance constraints. Remaining candidates are ranked by expected normalized
 #' clinical utility and annotated with joint target attainment and Pareto
 #' status. The component weights and thresholds are explicit, versioned
 #' clinical inputs rather than hidden application defaults.
@@ -279,6 +318,7 @@ lator_endpoint_set <- function(
 #' @export
 print.lator_endpoint <- function(x, ...) {
   cat("LibeRator endpoint:", x$name, "\n")
+  cat("  status: RESEARCH ONLY; not a clinical instruction\n")
   cat("  drug:", x$drug, " kind:", x$kind, " status:", x$status, "\n")
   cat("  version:", x$version, " source:", x$source %||% "", "\n")
   if (identical(x$kind, "multi_endpoint")) {
@@ -301,10 +341,12 @@ print.lator_endpoint <- function(x, ...) {
 #' @param status Governance status.
 #' @param metric Prediction metric; by default average concentration over the
 #'   last dose interval.
+#' @param metadata Additional metadata, including qualification attestation
+#'   when `status = "qualified"`.
 #' @export
 lator_endpoint_aed <- function(drug, lower, upper, unit, source,
                                status = c("draft", "reviewed", "qualified"),
-                               metric = "last_interval_average") {
+                               metric = "last_interval_average", metadata = list()) {
   drug <- .lator_scalar(drug, "drug")
   lator_endpoint(
     id = paste0("aed-", tolower(gsub("[^A-Za-z0-9]+", "-", drug))),
@@ -312,7 +354,7 @@ lator_endpoint_aed <- function(drug, lower, upper, unit, source,
     kind = "therapeutic_range", metric = metric, unit = unit,
     rules = list(lower = lower, upper = upper, target = mean(c(lower, upper))),
     source = source, status = match.arg(status),
-    metadata = list(domain = "anti-epileptic-drug", target_policy = "range-midpoint")
+    metadata = c(list(domain = "anti-epileptic-drug", target_policy = "range-midpoint"), metadata)
   )
 }
 
@@ -324,15 +366,16 @@ lator_endpoint_aed <- function(drug, lower, upper, unit, source,
 #' @param source Evidence or policy provenance.
 #' @param anchor Patient procedure-event name used as time zero.
 #' @param status Governance status.
+#' @param metadata Additional metadata.
 #' @export
 lator_endpoint_atg <- function(drug, targets, unit, source, anchor = "transplantation",
-                               status = c("draft", "reviewed", "qualified")) {
+                               status = c("draft", "reviewed", "qualified"), metadata = list()) {
   lator_endpoint(
     id = paste0("atg-", tolower(gsub("[^A-Za-z0-9]+", "-", drug))),
     name = paste(drug, "pre-transplant targets"), drug = drug,
     kind = "pre_event_target", metric = "window_concentration", unit = unit,
     rules = list(targets = as.data.frame(targets), anchor = anchor),
-    source = source, status = match.arg(status), metadata = list(domain = "ATG")
+    source = source, status = match.arg(status), metadata = c(list(domain = "ATG"), metadata)
   )
 }
 
@@ -342,20 +385,26 @@ lator_endpoint_atg <- function(drug, targets, unit, source, anchor = "transplant
 #' @param mic_variable Covariate/event name containing MIC.
 #' @param threshold_multiplier Threshold as a multiple of MIC.
 #' @param free_fraction Fraction unbound; use one if predictions are already free concentrations.
+#' @param mic_max_age Maximum age in hours of MIC evidence. Stale evidence is
+#'   rejected unless an audited evaluation-time override is supplied.
 #' @param source Evidence or policy provenance.
 #' @param status Governance status.
+#' @param metadata Additional metadata.
 #' @export
 lator_endpoint_beta_lactam <- function(drug, target_fraction = 0.4,
                                        mic_variable = "MIC", threshold_multiplier = 1,
-                                       free_fraction = 1, source,
-                                       status = c("draft", "reviewed", "qualified")) {
+                                       free_fraction = 1, mic_max_age = 168, source,
+                                       status = c("draft", "reviewed", "qualified"),
+                                       metadata = list()) {
   lator_endpoint(
     id = paste0("betalactam-", tolower(gsub("[^A-Za-z0-9]+", "-", drug))),
     name = paste(drug, "time above MIC"), drug = drug,
     kind = "fraction_time_above_threshold", metric = "fT>MIC", unit = "fraction",
     rules = list(target_fraction = target_fraction, mic_variable = mic_variable,
-                 threshold_multiplier = threshold_multiplier, free_fraction = free_fraction),
-    source = source, status = match.arg(status), metadata = list(domain = "beta-lactam")
+                 threshold_multiplier = threshold_multiplier,
+                 free_fraction = free_fraction, mic_max_age = mic_max_age),
+    source = source, status = match.arg(status),
+    metadata = c(list(domain = "beta-lactam"), metadata)
   )
 }
 
@@ -367,24 +416,26 @@ lator_endpoint_beta_lactam <- function(drug, target_fraction = 0.4,
 #' @param lower,upper AUC/MIC target bounds.
 #' @param source Guideline or institutional-policy provenance.
 #' @param mic_variable Patient covariate containing MIC.
+#' @param mic_max_age Maximum age in hours of MIC evidence.
 #' @param safety_auc_upper Optional absolute AUC safety ceiling.
 #' @param unit Display unit.
 #' @param status Governance status.
+#' @param metadata Additional metadata.
 #' @export
 lator_endpoint_vancomycin <- function(
     drug = "vancomycin", lower, upper, source, mic_variable = "MIC",
-    safety_auc_upper = NULL, unit = "AUC24/MIC",
-    status = c("draft", "reviewed", "qualified")) {
+    safety_auc_upper = NULL, unit = "AUC24/MIC", mic_max_age = 168,
+    status = c("draft", "reviewed", "qualified"), metadata = list()) {
   lator_endpoint(
     id = paste0("vancomycin-aucmic-", tolower(gsub("[^A-Za-z0-9]+", "-", drug))),
     name = paste(drug, "AUC/MIC target"), drug = drug,
     kind = "auc_mic_range", metric = "AUC24/MIC", unit = unit,
     rules = list(
       lower = lower, upper = upper, mic_variable = mic_variable,
-      safety_auc_upper = safety_auc_upper
+      safety_auc_upper = safety_auc_upper, mic_max_age = mic_max_age
     ),
     source = source, status = match.arg(status),
-    metadata = list(domain = "glycopeptide", target_policy = "efficacy-and-safety")
+    metadata = c(list(domain = "glycopeptide", target_policy = "efficacy-and-safety"), metadata)
   )
 }
 
@@ -396,13 +447,17 @@ lator_endpoint_vancomycin <- function(
 #' @param efficacy_upper Optional upper efficacy-exposure bound.
 #' @param efficacy_metric `"Cmax/MIC"` or `"AUC/MIC"`.
 #' @param mic_variable Patient covariate containing MIC.
+#' @param mic_max_age Maximum age in hours of MIC evidence.
 #' @param unit Display unit for the efficacy ratio.
 #' @param status Governance status.
+#' @param metadata Additional metadata.
 #' @export
 lator_endpoint_aminoglycoside <- function(
     drug, efficacy_lower, trough_upper, source, efficacy_upper = NULL,
     efficacy_metric = c("Cmax/MIC", "AUC/MIC"), mic_variable = "MIC",
-    unit = "ratio", status = c("draft", "reviewed", "qualified")) {
+    unit = "ratio", mic_max_age = 168,
+    status = c("draft", "reviewed", "qualified"),
+    metadata = list()) {
   efficacy_metric <- match.arg(efficacy_metric)
   lator_endpoint(
     id = paste0("aminoglycoside-", tolower(gsub("[^A-Za-z0-9]+", "-", drug))),
@@ -411,10 +466,10 @@ lator_endpoint_aminoglycoside <- function(
     rules = list(
       efficacy_lower = efficacy_lower, efficacy_upper = efficacy_upper,
       efficacy_metric = efficacy_metric, trough_upper = trough_upper,
-      mic_variable = mic_variable
+      mic_variable = mic_variable, mic_max_age = mic_max_age
     ),
     source = source, status = match.arg(status),
-    metadata = list(domain = "aminoglycoside", target_policy = "composite")
+    metadata = c(list(domain = "aminoglycoside", target_policy = "composite"), metadata)
   )
 }
 
@@ -444,16 +499,17 @@ lator_endpoint_tacrolimus <- function(
 #' @param source Evidence or policy provenance.
 #' @param drug Drug/analyte name.
 #' @param status Governance status.
+#' @param metadata Additional metadata.
 #' @export
 lator_endpoint_mycophenolate <- function(
     lower, upper, unit, source, drug = "mycophenolic acid",
-    status = c("draft", "reviewed", "qualified")) {
+    status = c("draft", "reviewed", "qualified"), metadata = list()) {
   lator_endpoint(
     id = "mycophenolic-acid-auc", name = "Mycophenolic acid AUC target",
     drug = drug, kind = "auc_range", metric = "AUC0-tau", unit = unit,
     rules = list(lower = lower, upper = upper, scale = 1),
     source = source, status = match.arg(status),
-    metadata = list(domain = "transplant-immunosuppression")
+    metadata = c(list(domain = "transplant-immunosuppression"), metadata)
   )
 }
 
@@ -464,17 +520,18 @@ lator_endpoint_mycophenolate <- function(
 #' @param doses Number of equivalent dose intervals represented by the target.
 #' @param drug Drug name.
 #' @param status Governance status.
+#' @param metadata Additional metadata.
 #' @export
 lator_endpoint_busulfan <- function(
     lower, upper, unit, source, doses = 1L, drug = "busulfan",
-    status = c("draft", "reviewed", "qualified")) {
+    status = c("draft", "reviewed", "qualified"), metadata = list()) {
   doses <- .lator_number(doses, "doses", positive = TRUE)
   lator_endpoint(
     id = "busulfan-cumulative-auc", name = "Busulfan cumulative AUC target",
     drug = drug, kind = "auc_range", metric = "cumulative AUC", unit = unit,
     rules = list(lower = lower, upper = upper, scale = doses),
     source = source, status = match.arg(status),
-    metadata = list(domain = "conditioning", equivalent_intervals = doses)
+    metadata = c(list(domain = "conditioning", equivalent_intervals = doses), metadata)
   )
 }
 
@@ -486,10 +543,11 @@ lator_endpoint_busulfan <- function(
 #' @param drug Drug name.
 #' @param default_tolerance Default nearest-prediction tolerance in hours.
 #' @param status Governance status.
+#' @param metadata Additional metadata.
 #' @export
 lator_endpoint_methotrexate <- function(
     targets, unit, source, drug = "methotrexate", default_tolerance = 1,
-    status = c("draft", "reviewed", "qualified")) {
+    status = c("draft", "reviewed", "qualified"), metadata = list()) {
   targets <- as.data.frame(targets)
   if (!"lower" %in% names(targets)) targets$lower <- -Inf
   if (!"tolerance" %in% names(targets)) targets$tolerance <- default_tolerance
@@ -499,7 +557,7 @@ lator_endpoint_methotrexate <- function(
     kind = "timed_thresholds", metric = "timed concentration", unit = unit,
     rules = list(targets = targets, anchor = "last_dose"),
     source = source, status = match.arg(status),
-    metadata = list(domain = "high-dose-methotrexate", target_policy = "timed-safety")
+    metadata = c(list(domain = "high-dose-methotrexate", target_policy = "timed-safety"), metadata)
   )
 }
 
@@ -509,10 +567,11 @@ lator_endpoint_methotrexate <- function(
 #' @param source Evidence or institutional-policy provenance.
 #' @param drug Intervention name.
 #' @param status Governance status.
+#' @param metadata Additional metadata.
 #' @export
 lator_endpoint_warfarin <- function(
     lower, upper, target_fraction, source, drug = "warfarin",
-    status = c("draft", "reviewed", "qualified")) {
+    status = c("draft", "reviewed", "qualified"), metadata = list()) {
   lator_endpoint(
     id = "warfarin-inr-time-in-range", name = "Warfarin INR time in range",
     drug = drug, kind = "time_in_range", metric = "INR TTR", unit = "fraction",
@@ -520,7 +579,7 @@ lator_endpoint_warfarin <- function(
       lower = lower, upper = upper, target_fraction = target_fraction
     ),
     source = source, status = match.arg(status),
-    metadata = list(domain = "anticoagulation", prediction_endpoint = "INR")
+    metadata = c(list(domain = "anticoagulation", prediction_endpoint = "INR"), metadata)
   )
 }
 
@@ -572,20 +631,60 @@ lator_endpoint_warfarin <- function(
   ))
 }
 
-.lator_endpoint_covariate <- function(patient, name, times) {
+.lator_endpoint_covariate <- function(
+    patient, name, times, method = "locf", max_age,
+    freshness_override = NULL) {
   if (is.null(patient)) .lator_stop("This endpoint requires a patient timeline.")
   resolved <- lator_covariate_at(
-    patient, name, times, method = "locf", max_age = Inf
+    patient, name, times, method = method, max_age = max_age
   )
   if (any(!is.finite(resolved$value))) {
-    .lator_stop("Required endpoint covariate `", name, "` is unresolved.")
+    stale <- resolved$status %in% "stale"
+    if (is.null(freshness_override) || !any(stale)) {
+      .lator_stop(
+        "Required endpoint covariate `", name, "` is unresolved or older than ",
+        format(max_age), " hours. Add current evidence or supply an explicit ",
+        "audited `freshness_override`."
+      )
+    }
+    if (!is.list(freshness_override)) {
+      .lator_stop("`freshness_override` must be a named audit list.")
+    }
+    actor <- trimws(as.character(freshness_override$actor %||% "")[[1L]])
+    reason <- trimws(as.character(freshness_override$reason %||% "")[[1L]])
+    if (!nzchar(actor) || !nzchar(reason)) {
+      .lator_stop("A freshness override requires non-empty `actor` and `reason` fields.")
+    }
+    overridden <- lator_covariate_at(
+      patient, name, times, method = method, max_age = Inf
+    )
+    if (any(!is.finite(overridden$value))) {
+      .lator_stop("Required endpoint covariate `", name, "` remains unresolved after override.")
+    }
+    resolved <- overridden
+    attr(resolved, "freshness_override") <- list(
+      actor = actor, reason = reason,
+      recorded_at = .lator_now(), configured_max_age = max_age,
+      maximum_source_age = max(resolved$age, na.rm = TRUE),
+      source_event_ids = unique(resolved$source_event_id[nzchar(resolved$source_event_id)])
+    )
   }
-  max(resolved$value)
+  values <- as.numeric(resolved$value)
+  attr(values, "freshness_evidence") <- resolved
+  values
 }
 
-.lator_prediction_columns <- function(predictions) {
+.lator_prediction_columns <- function(predictions, value_column = NULL) {
   time <- intersect(c("TIME", "time"), names(predictions))[1L]
-  value <- intersect(c("IPRED", "PRED", "DV", "value", "concentration"), names(predictions))[1L]
+  if (!is.null(value_column)) {
+    value_column <- as.character(value_column)[[1L]]
+    if (!value_column %in% names(predictions)) {
+      .lator_stop("Requested endpoint prediction column `", value_column, "` is unavailable.")
+    }
+    value <- value_column
+  } else {
+    value <- intersect(c("IPRED", "PRED", "DV", "value", "concentration"), names(predictions))[1L]
+  }
   if (is.na(time) || is.na(value)) .lator_stop("Predictions require TIME/time and IPRED/PRED/value columns.")
   list(time = time, value = value)
 }
@@ -601,7 +700,7 @@ lator_endpoint_warfarin <- function(
   })
   common <- Reduce(intersect, sim_ids)
   if (!length(common)) {
-    .lator_stop("Multi-endpoint components have no common posterior draws.")
+    .lator_stop("Multi-endpoint components have no common conditional ETA draws.")
   }
   component_ids <- vapply(components, `[[`, character(1), "component_id")
   weights <- vapply(components, `[[`, numeric(1), "weight")
@@ -690,6 +789,9 @@ lator_endpoint_warfarin <- function(
     components = component_summary,
     component_results = do.call(rbind, long),
     component_evaluations = stats::setNames(evaluations, component_ids),
+    covariate_freshness = unname(unlist(lapply(
+      evaluations, `[[`, "covariate_freshness"
+    ), recursive = FALSE)),
     utility_definition = list(
       transform = "exp(-normalized_loss)",
       aggregation = "weighted_arithmetic_mean",
@@ -861,21 +963,31 @@ lator_endpoint_warfarin <- function(
 #' @param predictions Prediction data frame. Optional `SIM` identifies uncertainty replicates.
 #' @param patient Patient timeline, required when an endpoint obtains MIC or an event anchor from it.
 #' @param interval Optional two-element evaluation interval.
+#' @param value_column Optional explicit prediction column. Regimen simulation
+#'   uses `"DV"` when residual observation variability is requested and
+#'   `"IPRED"` otherwise, preventing a residualised run from being silently
+#'   scored on its non-residual individual prediction.
+#' @param freshness_override Optional named list with `actor` and `reason`.
+#'   This permits stale endpoint covariate evidence for one evaluation and is
+#'   retained in the returned audit record; it never changes the endpoint.
 #' @return Per-replicate metrics and an aggregate target-attainment summary.
 #' @export
-lator_endpoint_evaluate <- function(endpoint, predictions, patient = NULL, interval = NULL) {
+lator_endpoint_evaluate <- function(endpoint, predictions, patient = NULL,
+                                    interval = NULL, value_column = NULL,
+                                    freshness_override = NULL) {
   endpoint <- lator_endpoint_validate(endpoint)
   if (identical(endpoint$kind, "multi_endpoint")) {
     evaluations <- lapply(endpoint$rules$components, function(component) {
       lator_endpoint_evaluate(
         component$endpoint, predictions, patient = patient,
-        interval = interval
+        interval = interval, value_column = value_column,
+        freshness_override = freshness_override
       )
     })
     return(.lator_endpoint_combine_evaluations(endpoint, evaluations))
   }
   predictions <- as.data.frame(predictions)
-  columns <- .lator_prediction_columns(predictions)
+  columns <- .lator_prediction_columns(predictions, value_column)
   predictions$.lator_time <- as.numeric(predictions[[columns$time]])
   predictions$.lator_value <- as.numeric(predictions[[columns$value]])
   predictions$.lator_sim <- if ("SIM" %in% names(predictions)) predictions$SIM else 1L
@@ -886,6 +998,24 @@ lator_endpoint_evaluate <- function(endpoint, predictions, patient = NULL, inter
   }
   if (!nrow(predictions)) .lator_stop("No predictions remain in the endpoint evaluation interval.")
   groups <- split(predictions, predictions$.lator_sim)
+  freshness_evidence <- list()
+  resolve_endpoint_covariate <- function(name, times) {
+    values <- .lator_endpoint_covariate(
+      patient, name, times, method = "locf",
+      max_age = endpoint$rules$mic_max_age,
+      freshness_override = freshness_override
+    )
+    evidence <- attr(values, "freshness_evidence")
+    key <- paste(name, min(times), max(times), sep = "|")
+    freshness_evidence[[key]] <<- list(
+      covariate = name,
+      configured_max_age = endpoint$rules$mic_max_age,
+      source_event_ids = unique(evidence$source_event_id[nzchar(evidence$source_event_id)]),
+      maximum_source_age = max(evidence$age, na.rm = TRUE),
+      override = attr(evidence, "freshness_override") %||% NULL
+    )
+    values
+  }
 
   evaluate_one <- function(data) {
     time <- data$.lator_time; value <- data$.lator_value
@@ -911,8 +1041,8 @@ lator_endpoint_evaluate <- function(endpoint, predictions, patient = NULL, inter
     }
     if (endpoint$kind == "auc_mic_range") {
       auc <- .lator_nca_auc(time, value)
-      mic <- .lator_endpoint_covariate(patient, endpoint$rules$mic_variable, time)
-      metric <- auc / mic
+      mic <- resolve_endpoint_covariate(endpoint$rules$mic_variable, time)
+      metric <- .lator_nca_auc(time, value / mic)
       lower <- endpoint$rules$lower; upper <- endpoint$rules$upper
       safety <- endpoint$rules$safety_auc_upper
       attained <- metric >= lower && metric <= upper &&
@@ -922,10 +1052,10 @@ lator_endpoint_evaluate <- function(endpoint, predictions, patient = NULL, inter
       return(c(metric = metric, attained = attained, score = penalty))
     }
     if (endpoint$kind == "peak_mic_safety") {
-      mic <- .lator_endpoint_covariate(patient, endpoint$rules$mic_variable, time)
+      mic <- resolve_endpoint_covariate(endpoint$rules$mic_variable, time)
       efficacy <- if (identical(endpoint$rules$efficacy_metric, "AUC/MIC")) {
-        .lator_nca_auc(time, value) / mic
-      } else max(value, na.rm = TRUE) / mic
+        .lator_nca_auc(time, value / mic)
+      } else max(value / mic, na.rm = TRUE)
       trough <- min(value, na.rm = TRUE)
       lower <- endpoint$rules$efficacy_lower
       upper <- endpoint$rules$efficacy_upper
@@ -940,11 +1070,8 @@ lator_endpoint_evaluate <- function(endpoint, predictions, patient = NULL, inter
     }
     if (endpoint$kind == "fraction_time_above_threshold") {
       if (is.null(patient)) .lator_stop("A patient timeline is required to resolve MIC.")
-      resolved <- lator_covariate_at(
-        patient, endpoint$rules$mic_variable, time, method = "locf", max_age = Inf
-      )
-      if (any(!is.finite(resolved$value))) .lator_stop("MIC is unresolved for part of the evaluation interval.")
-      threshold <- resolved$value * endpoint$rules$threshold_multiplier
+      mic <- resolve_endpoint_covariate(endpoint$rules$mic_variable, time)
+      threshold <- mic * endpoint$rules$threshold_multiplier
       effective <- value * endpoint$rules$free_fraction
       metric <- .lator_time_above(time, effective, threshold)
       target <- endpoint$rules$target_fraction
@@ -1018,6 +1145,7 @@ lator_endpoint_evaluate <- function(endpoint, predictions, patient = NULL, inter
     endpoint_id = endpoint$id, endpoint_version = endpoint$version,
     results = result, attainment_probability = mean(as.logical(result$attained)),
     median_metric = stats::median(result$metric), median_score = stats::median(result$score),
+    covariate_freshness = unname(freshness_evidence),
     evaluated_at = .lator_now()
   )
 }
@@ -1072,7 +1200,8 @@ lator_endpoint_evaluate <- function(endpoint, predictions, patient = NULL, inter
       field("source", "Evidence or policy source", required = TRUE,
             help = source_help, span = 2L),
       field("status", "Governance status", type = "select", default = "draft",
-            options = c("draft", "reviewed", "qualified")),
+            options = c("draft", "reviewed"),
+            help = "Qualified status requires a separately attested governance record."),
       field("version", "Endpoint version", default = "1.0.0")
     )
   }
@@ -1090,13 +1219,19 @@ lator_endpoint_evaluate <- function(endpoint, predictions, patient = NULL, inter
       field("upper", "Upper AUC/MIC target", type = "number"),
       field("safety_auc_upper", "Optional absolute AUC ceiling",
             type = "number", required = FALSE),
-      field("mic_variable", "MIC covariate", default = "MIC")
+      field("mic_variable", "MIC covariate", default = "MIC"),
+      field("mic_max_age", "Maximum MIC age (hours)", type = "number",
+            default = 168,
+            help = "Older MIC evidence is rejected unless an audited override is supplied.")
     ), common()),
     "template-betalactam-ftmic" = c(list(
       field("drug", "Drug"),
       field("target_fraction", "Required interval fraction", type = "number",
             default = 0.4),
       field("mic_variable", "MIC covariate", default = "MIC"),
+      field("mic_max_age", "Maximum MIC age (hours)", type = "number",
+            default = 168,
+            help = "Older MIC evidence is rejected unless an audited override is supplied."),
       field("threshold_multiplier", "MIC multiplier", type = "number",
             default = 1),
       field("free_fraction", "Unbound fraction", type = "number", default = 1)
@@ -1110,6 +1245,9 @@ lator_endpoint_evaluate <- function(endpoint, predictions, patient = NULL, inter
             type = "number", required = FALSE),
       field("trough_upper", "Trough safety ceiling", type = "number"),
       field("mic_variable", "MIC covariate", default = "MIC"),
+      field("mic_max_age", "Maximum MIC age (hours)", type = "number",
+            default = 168,
+            help = "Older MIC evidence is rejected unless an audited override is supplied."),
       field("unit", "Display unit", default = "ratio")
     ), common()),
     "template-tacrolimus" = c(list(
@@ -1357,11 +1495,13 @@ lator_endpoint_evaluate <- function(endpoint, predictions, patient = NULL, inter
     "template-vancomycin-aucmic" = list(
       lower = rules$lower, upper = rules$upper,
       mic_variable = rules$mic_variable,
-      safety_auc_upper = rules$safety_auc_upper %||% ""
+      safety_auc_upper = rules$safety_auc_upper %||% "",
+      mic_max_age = rules$mic_max_age
     ),
     "template-betalactam-ftmic" = list(
       target_fraction = rules$target_fraction,
       mic_variable = rules$mic_variable,
+      mic_max_age = rules$mic_max_age,
       threshold_multiplier = rules$threshold_multiplier,
       free_fraction = rules$free_fraction
     ),
@@ -1370,7 +1510,8 @@ lator_endpoint_evaluate <- function(endpoint, predictions, patient = NULL, inter
       efficacy_lower = rules$efficacy_lower,
       efficacy_upper = rules$efficacy_upper %||% "",
       trough_upper = rules$trough_upper,
-      mic_variable = rules$mic_variable
+      mic_variable = rules$mic_variable,
+      mic_max_age = rules$mic_max_age
     ),
     "template-tacrolimus" = list(
       lower = rules$lower, upper = rules$upper
@@ -1533,6 +1674,7 @@ lator_endpoint_evaluate <- function(endpoint, predictions, patient = NULL, inter
       drug = text("drug", "vancomycin"),
       lower = number("lower"), upper = number("upper"), source = source,
       mic_variable = text("mic_variable", "MIC"),
+      mic_max_age = number("mic_max_age", 168),
       safety_auc_upper = number("safety_auc_upper", required = FALSE),
       unit = text("unit", "AUC24/MIC"), status = status
     ),
@@ -1540,6 +1682,7 @@ lator_endpoint_evaluate <- function(endpoint, predictions, patient = NULL, inter
       drug = text("drug"),
       target_fraction = number("target_fraction", 0.4),
       mic_variable = text("mic_variable", "MIC"),
+      mic_max_age = number("mic_max_age", 168),
       threshold_multiplier = number("threshold_multiplier", 1),
       free_fraction = number("free_fraction", 1),
       source = source, status = status
@@ -1551,6 +1694,7 @@ lator_endpoint_evaluate <- function(endpoint, predictions, patient = NULL, inter
       efficacy_upper = number("efficacy_upper", required = FALSE),
       efficacy_metric = text("efficacy_metric", "Cmax/MIC"),
       mic_variable = text("mic_variable", "MIC"),
+      mic_max_age = number("mic_max_age", 168),
       unit = text("unit", "ratio"), status = status
     ),
     "template-tacrolimus" = lator_endpoint_tacrolimus(

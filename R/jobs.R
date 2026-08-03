@@ -21,6 +21,13 @@ lator_job <- function(type = c("individualise", "regimen"), model, data,
   if (any(grepl("NAME|DOB|ADDRESS|EMAIL|PHONE|NHS|MRN", toupper(names(data))))) {
     .lator_stop("Queue data appears to contain a direct-identifier column. Supply pseudonymous model data only.")
   }
+  if ("ID" %in% names(data)) {
+    # Patient pseudonyms are still linkable identifiers.  Workers only need a
+    # stable within-job subject key, so discard the caller's ID mapping before
+    # the payload crosses a process or network boundary.
+    source_ids <- as.character(data$ID)
+    data$ID <- match(source_ids, unique(source_ids))
+  }
   if (type == "regimen" && !"CANDIDATE" %in% names(data)) .lator_stop("Regimen queue data requires `CANDIDATE`.")
   LibeRties::ls_job(type, model, data, arguments, label)
 }
@@ -57,7 +64,10 @@ lator_worker_task <- function(type, model, data, arguments = list()) {
       list(model = model, data = candidate_data, eta = eta_value, residual = residual), arguments
     ))
     if (!"SIM" %in% names(predicted)) predicted$SIM <- predicted$ID
-    evaluation <- lator_endpoint_evaluate(endpoint, predicted[predicted$EVID == 0L, , drop = FALSE], interval = interval)
+    evaluation <- lator_endpoint_evaluate(
+      endpoint, predicted[predicted$EVID == 0L, , drop = FALSE],
+      interval = interval, value_column = if (residual) "DV" else "IPRED"
+    )
     list(candidate_id = id, predictions = predicted, evaluation = evaluation)
   })
   names(results) <- names(pieces)

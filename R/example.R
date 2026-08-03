@@ -10,7 +10,10 @@
 #' example <- lator_example_aed()
 #' assessment <- lator_assess(
 #'   example$patient, example$model, example$endpoint,
-#'   mode = "static", maxit = 20
+#'   mode = "static", maxit = 20,
+#'   covariate_policies = list(
+#'     WT = list(method = "locf", max_age = 365 * 24)
+#'   )
 #' )
 #' assessment$eta_trajectory
 #' @export

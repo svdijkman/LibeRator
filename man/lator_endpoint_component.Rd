@@ -22,7 +22,7 @@ lator_endpoint_component(
 endpoint set, so only their relative values matter.}
 
 \item{hard_constraint}{Whether candidate regimens must satisfy a minimum
-posterior target-attainment probability for this component.}
+target-attainment probability across conditional ETA draws for this component.}
 
 \item{minimum_attainment}{Required probability when `hard_constraint` is
 `TRUE`.}

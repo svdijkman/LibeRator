@@ -2,7 +2,7 @@
 % Please edit documentation in R/regimen.R
 \name{lator_regimen_optimise}
 \alias{lator_regimen_optimise}
-\title{Compare candidate regimens under posterior uncertainty}
+\title{Compare candidate regimens under conditional individual uncertainty}
 \usage{
 lator_regimen_optimise(
   assessment,
@@ -29,9 +29,9 @@ lator_regimen_optimise(
 
 \item{endpoint}{Endpoint or versioned multi-endpoint objective to optimise;
 defaults to the assessment endpoint. Multi-endpoint components are
-evaluated on shared posterior draws.}
+evaluated on shared conditional ETA draws.}
 
-\item{nsim}{Number of posterior draws.}
+\item{nsim}{Number of conditional ETA draws.}
 
 \item{grid_step}{Prediction-grid spacing in hours.}
 
@@ -56,7 +56,10 @@ A ranked result with summaries and per-candidate trajectories.
   normalized expected utility, hard-constraint status, and Pareto status.
 }
 \description{
-The complete dosing history is replayed for every posterior draw so that
+The complete dosing history is replayed for every conditional ETA draw so that
 accumulated compartment amounts are retained. Parameter uncertainty is
-evaluated in one batched C++ simulation call per candidate.
+evaluated in one batched C++ simulation call per candidate. These draws use
+the individual's Laplace approximation conditional on the selected model and
+fitted population parameters; they do not include population-parameter or
+model-structure uncertainty.
 }

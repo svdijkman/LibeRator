@@ -10,7 +10,8 @@ lator_endpoint_methotrexate(
   source,
   drug = "methotrexate",
   default_tolerance = 1,
-  status = c("draft", "reviewed", "qualified")
+  status = c("draft", "reviewed", "qualified"),
+  metadata = list()
 )
 }
 \arguments{
@@ -26,6 +27,8 @@ lator_endpoint_methotrexate(
 \item{default_tolerance}{Default nearest-prediction tolerance in hours.}
 
 \item{status}{Governance status.}
+
+\item{metadata}{Additional metadata.}
 }
 \description{
 High-dose methotrexate timed-concentration endpoint

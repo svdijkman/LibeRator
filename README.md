@@ -24,32 +24,36 @@ exact [ecosystem compatibility set](../docs/INSTALL.md) and review
   lineage, and integrity hash.
 - Effective-dated covariates with observed, LOCF, interpolated, nearest, stale, missing, and explicit-fallback states. Missing values are never silently replaced with a population value.
 - Static empirical-Bayes individualisation and genuinely time-varying ETA states under a correlated random-walk prior, using LibeRation's persistent C++/CppAD individual objective.
+- Bounded active assessment history with individually encrypted archives,
+  tamper-evident archive indexes, and model registry id/version/content-hash
+  provenance. `lator_assessment_history()` verifies and retrieves both active
+  and archived assessments.
 - Ten versioned therapeutic endpoint families covering antiseizure therapeutic
   ranges, beta-lactam fT>MIC, ATG pre-event targets, vancomycin AUC/MIC,
   aminoglycoside exposure and safety, tacrolimus trough, mycophenolate AUC,
   busulfan cumulative exposure, methotrexate timed concentrations, and warfarin
   time in INR range.
 - Versioned multi-endpoint clinical objectives that combine efficacy, safety,
-  and secondary endpoints. All components are evaluated on the same posterior
+  and secondary endpoints. All components are evaluated on the same conditional ETA
   draws; the engine reports joint attainment, component attainment, normalized
-  expected utility, hard posterior constraints, and the Pareto-efficient
+  expected utility, hard conditional-draw probability constraints, and the Pareto-efficient
   candidate set.
 - Fail-closed patient-to-model selection from LibeRary. Candidate models must
   carry a current, scoped clinical-use qualification and pass drug, indication,
   endpoint, route, formulation, regimen, assay, covariate, population-range, and
   review-date gates. Ambiguous or unsuitable cases are surfaced for review
   instead of silently choosing a model.
-- Batched posterior-uncertainty simulations that rank feasible dose/interval grids by target attainment and endpoint distance.
+- Batched conditional-uncertainty simulations that rank feasible dose/interval grids by target attainment and endpoint distance.
 - Shared native LibeRation NCA summaries for AUC, average steady-state
   concentration, peak, trough, and fluctuation across individual and candidate
   regimen trajectories.
 - An explicit user selection step that turns one or more simulated candidates
-  into auditable, vertically stacked future-prediction artifacts with posterior
+  into auditable, vertically stacked future-prediction artifacts with conditional
   medians, 90% intervals, target ranges, linked endpoint evaluations, and a
-  native-unit table comparing each endpoint's numerical posterior outcome with
+  native-unit table comparing each endpoint's numerical conditional outcome with
   its target and any hard probability constraint.
 - Multi-medication patient profiles: the medication selector keeps model,
-  posterior, regimen, and endpoint context separate for each therapy. A
+  individualisation, regimen, and endpoint context separate for each therapy. A
   previously chosen endpoint is restored on switching; a medicine without an
   endpoint opens the endpoint library.
 - Editable endpoint recommendations for known medicines. Reference ranges and
@@ -65,7 +69,7 @@ exact [ecosystem compatibility set](../docs/INSTALL.md) and review
   added to the patient; TDM can reference those drugs or their explicitly
   registered metabolites/analytes. The nested `+` control adds a medication
   without losing an unfinished evidence form.
-- Individualisation views expose ETAs with posterior uncertainty, derived
+- Individualisation views expose ETAs with conditional Laplace uncertainty, derived
   individual structural parameters, and the fitted individual PK profile with
   observed concentrations. Solid curves show central predictions; dashed
   limits show pointwise prediction intervals, while shading is reserved for
@@ -79,7 +83,7 @@ exact [ecosystem compatibility set](../docs/INSTALL.md) and review
 - Validated LibeRary model import, encrypted local model registration, and typed LibeRties individualisation/regimen jobs that never transmit a workspace key.
 - A guided React/Shiny workbench with a professional teal light/dark theme,
   explicit assessment-readiness checks, patient timeline, evidence-entry
-  popups, posterior-state display, searchable endpoint library, endpoint
+  popups, conditional patient-state display, searchable endpoint library, endpoint
   provenance, selectable regimen comparison, and future-prediction chart.
 
 Persistent patient workspaces default to
@@ -161,7 +165,8 @@ components and validated for the intended use.
 Endpoints for one medication can be composed into an immutable objective set.
 One component must be primary. Relative weights are explicit and versioned;
 they are never inferred silently. A component can additionally be a hard
-chance constraint, such as requiring at least 90% posterior probability of
+chance constraint, such as requiring at least 90% probability across conditional
+ETA draws of
 meeting a safety endpoint.
 
 ```r
@@ -192,12 +197,12 @@ objective <- lator_endpoint_set(
 )
 ```
 
-For each candidate and posterior draw, LibeRator converts each endpoint's
+For each candidate and conditional ETA draw, LibeRator converts each endpoint's
 normalized loss to utility as `exp(-loss)`, then calculates the weighted
-arithmetic mean. Candidates that fail a hard posterior constraint are not
+arithmetic mean. Candidates that fail a hard conditional-draw constraint are not
 decision-eligible. Remaining candidates are ranked by expected utility and
 marked when Pareto-efficient across component utilities. Joint attainment is
-calculated from simultaneous success on shared posterior draws, preserving
+calculated from simultaneous success on shared conditional ETA draws, preserving
 correlation between outcomes.
 
 In the workbench, create the individual endpoints first and select
@@ -212,12 +217,19 @@ The packaged dual-endpoint example combines:
   interval should be within the synthetic 2–8 mg/L range;
 - a **safety endpoint**: the periodic steady-state trough should be within the
   synthetic 0.5–5 mg/L range;
-- a **hard safety rule**: at least 75% of posterior draws must meet that
+- a **hard safety rule**: at least 75% of conditional ETA draws must meet that
   trough-safety endpoint before a regimen is decision-eligible; and
 - explicit **2:1 efficacy-to-safety utility weights** for ranking eligible
   regimens. These normalize to two-thirds and one-third.
 
 Every value is synthetic and deliberately unsuitable as a clinical target.
+
+Unless residual variability is explicitly requested for a regimen comparison,
+these intervals and probabilities condition on the selected model and fitted
+population parameters and propagate only the individual's Laplace ETA
+approximation. Even when residual variability is included, population-parameter
+and model-structure uncertainty remain excluded; the outputs are not full
+Bayesian posterior predictive intervals.
 Start a fresh graphical demonstration with:
 
 ```r

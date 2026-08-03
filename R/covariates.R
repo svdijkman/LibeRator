@@ -173,7 +173,7 @@ lator_covariate_at <- function(patient, name, times,
   data <- data.frame(time = times)
   evidence <- list(); warnings <- character()
   for (name in unique(names)) {
-    policy <- policies[[name]] %||% policies[[toupper(name)]] %||% list(method = "locf")
+    policy <- policies[[name]] %||% policies[[toupper(name)]] %||% list(method = "none")
     if (!is.list(policy)) .lator_stop("Covariate policies must be named argument lists.")
     resolved <- do.call(lator_covariate_at, c(
       list(patient = patient, name = name, times = times, cutoff = cutoff), policy

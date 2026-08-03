@@ -109,16 +109,16 @@ test_that("therapeutic GUI retains shared theme, dove, and responsive controls",
   expect_match(extras_css, "\\.lr-add-medication-mark::before")
   expect_match(
     script,
-    "posterior prediction interval (individual ETA uncertainty)",
+    "similar-patient prediction interval (ETA variability)",
     fixed = TRUE
   )
   expect_match(script, "EndpointOutcomeTable", fixed = TRUE)
-  expect_match(script, "Numerical posterior outcomes", fixed = TRUE)
+  expect_match(script, "Numerical conditional-draw outcomes", fixed = TRUE)
   expect_match(script, "prediction.endpointOutcomes", fixed = TRUE)
   expect_match(script, "Endpoint intervals are quantiles", fixed = TRUE)
   expect_match(extras_css, ".lr-endpoint-outcome-table", fixed = TRUE)
   expect_match(
-    script, "It is not a confidence interval for the mean", fixed = TRUE
+    script, "these are not confidence intervals for a population mean", fixed = TRUE
   )
   expect_match(script, "Burden-adjusted score", fixed = TRUE)
   expect_false(grepl('"R constructor"', script, fixed = TRUE))

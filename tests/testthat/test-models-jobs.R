@@ -26,5 +26,7 @@ test_that("queue jobs reject apparent direct identifiers", {
   job <- lator_job("individualise", lator_test_model(), data)
   expect_s3_class(job, "liber_job")
   expect_identical(job$type, "individualise")
+  expect_identical(job$data$ID, 1L)
+  expect_false(any(grepl("PSEUDONYM", unlist(job$data), fixed = TRUE)))
   expect_error(lator_job("individualise", lator_test_model(), transform(data, PATIENT_NAME = "A")), "identifier")
 })

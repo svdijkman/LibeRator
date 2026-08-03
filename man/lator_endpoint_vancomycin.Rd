@@ -12,7 +12,9 @@ lator_endpoint_vancomycin(
   mic_variable = "MIC",
   safety_auc_upper = NULL,
   unit = "AUC24/MIC",
-  status = c("draft", "reviewed", "qualified")
+  mic_max_age = 168,
+  status = c("draft", "reviewed", "qualified"),
+  metadata = list()
 )
 }
 \arguments{
@@ -28,7 +30,11 @@ lator_endpoint_vancomycin(
 
 \item{unit}{Display unit.}
 
+\item{mic_max_age}{Maximum age in hours of MIC evidence.}
+
 \item{status}{Governance status.}
+
+\item{metadata}{Additional metadata.}
 }
 \description{
 Target values are deliberately supplied by the caller so an institution can
