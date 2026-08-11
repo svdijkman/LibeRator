@@ -42,18 +42,8 @@ lator_regimen_candidates <- function(amounts, intervals, routes = "oral",
       any(!is.finite(covariance))) {
     .lator_stop("ETA covariance must be a finite square matrix matching the ETA mean.")
   }
-  covariance <- (covariance + t(covariance)) / 2
-  eig <- eigen(covariance, symmetric = TRUE)
-  scale <- max(1, max(abs(eig$values)))
-  if (min(eig$values) < -sqrt(.Machine$double.eps) * scale) {
-    .lator_stop(
-      "ETA covariance is not positive semidefinite; regimen uncertainty ",
-      "simulation was stopped instead of silently truncating negative eigenvalues."
-    )
-  }
-  root <- eig$vectors %*% diag(sqrt(pmax(eig$values, 0)), length(mean))
-  matrix(stats::rnorm(n * length(mean)), n, length(mean)) %*% t(root) +
-    matrix(mean, n, length(mean), byrow = TRUE)
+  native <- utils::getFromNamespace(".liberation_mvn_draws", "LibeRation")
+  native(mean, covariance, as.integer(n))
 }
 
 .lator_candidate_future <- function(candidate, start_time, grid_step, model) {
@@ -376,11 +366,103 @@ lator_regimen_candidates <- function(amounts, intervals, routes = "oral",
   )
 }
 
+.lator_regimen_prediction_batches <- function(
+    assessment, patient, candidates, feasible, eta_samples, start_time,
+    grid_step, residual, n_cores, batch_candidates = getOption(
+      "LibeRator.regimen_batch_candidates", 8L)) {
+  model <- assessment$model
+  nsim <- nrow(eta_samples)
+  state_times <- assessment$eta_trajectory$start_time[
+    is.finite(assessment$eta_trajectory$start_time)
+  ]
+  result <- vector("list", nrow(candidates))
+  selected <- which(feasible)
+  if (!length(selected)) return(result)
+  batch_candidates <- max(1L, as.integer(batch_candidates))
+  chunks <- split(selected, ceiling(seq_along(selected) / batch_candidates))
+  for (chunk in chunks) {
+    pieces <- list()
+    eta_blocks <- list()
+    prefixes <- vector("list", length(chunk))
+    for (position in seq_along(chunk)) {
+      index <- chunk[[position]]
+      candidate <- candidates[index, , drop = FALSE]
+      future <- .lator_candidate_future(
+        candidate, start_time, grid_step, model
+      )
+      prepared_transition <- .lator_patient_dataset(
+        patient, model, assessment$analyte, cutoff = assessment$cutoff,
+        covariate_policies = assessment$covariate_policies %||% list(),
+        dynamic = identical(assessment$mode, "dynamic"),
+        state_times = state_times, include_future = future
+      )
+      transition <- .lator_candidate_covariates(
+        prepared_transition$data, candidate, model
+      )
+      steady_events <- .lator_candidate_steady_state(
+        candidate, start_time, grid_step, model
+      )
+      prepared_steady <- .lator_patient_dataset(
+        patient, model, assessment$analyte, cutoff = assessment$cutoff,
+        covariate_policies = assessment$covariate_policies %||% list(),
+        dynamic = identical(assessment$mode, "dynamic"),
+        state_times = state_times, include_future = steady_events
+      )
+      steady <- prepared_steady$data[
+        prepared_steady$data$.LATOR_ROLE %in% "future", , drop = FALSE
+      ]
+      steady <- .lator_candidate_covariates(
+        steady, candidate, model, future_only = FALSE
+      )
+      transition_prefix <- sprintf("C%05dT", index)
+      steady_prefix <- sprintf("C%05dS", index)
+      prefixes[[position]] <- c(transition_prefix, steady_prefix)
+      pieces[[length(pieces) + 1L]] <- .lator_replicate_dataset(
+        transition, nsim, transition_prefix
+      )
+      pieces[[length(pieces) + 1L]] <- .lator_replicate_dataset(
+        steady, nsim, steady_prefix
+      )
+      eta_blocks[[length(eta_blocks) + 1L]] <- eta_samples
+      eta_blocks[[length(eta_blocks) + 1L]] <- eta_samples
+    }
+    combined <- do.call(.lator_bind_datasets, pieces)
+    predictions <- LibeRation::nm_simulate(
+      model, combined, eta = do.call(rbind, eta_blocks),
+      residual = isTRUE(residual), nsim = 1L, n_cores = n_cores
+    )
+    ids <- as.character(predictions$ID)
+    for (position in seq_along(chunk)) {
+      index <- chunk[[position]]
+      prefix <- prefixes[[position]]
+      transition_rows <- startsWith(ids, prefix[[1L]]) &
+        predictions$TIME >= start_time & predictions$EVID == 0L
+      steady_rows <- startsWith(ids, prefix[[2L]]) &
+        predictions$EVID == 0L
+      transition <- predictions[transition_rows, , drop = FALSE]
+      steady <- predictions[steady_rows, , drop = FALSE]
+      transition$SIM <- as.integer(sub(
+        paste0("^", prefix[[1L]]), "", as.character(transition$ID)
+      ))
+      steady$SIM <- as.integer(sub(
+        paste0("^", prefix[[2L]]), "", as.character(steady$ID)
+      ))
+      result[[index]] <- list(
+        transition = transition, steady = steady,
+        backend = "batched-liberation-engine"
+      )
+    }
+  }
+  result
+}
+
 #' Compare candidate regimens under conditional individual uncertainty
 #'
 #' The complete dosing history is replayed for every conditional ETA draw so that
 #' accumulated compartment amounts are retained. Parameter uncertainty is
-#' evaluated in one batched C++ simulation call per candidate. These draws use
+#' evaluated in bounded, batched C++ simulation calls shared across candidates.
+#' The batch size can be tuned with `options(LibeRator.regimen_batch_candidates)`
+#' to balance throughput against transient memory. These draws use
 #' the individual's Laplace approximation conditional on the selected model and
 #' fitted population parameters; they do not include population-parameter or
 #' model-structure uncertainty.
@@ -425,11 +507,16 @@ lator_regimen_optimise <- function(assessment, patient, candidates,
   latest <- if (length(visible_events)) max(vapply(visible_events, `[[`, numeric(1), "time")) else 0
   start_time <- .lator_number(start_time %||% (latest + sqrt(.Machine$double.eps)), "start_time")
   model <- assessment$model
-  state_times <- assessment$eta_trajectory$start_time[is.finite(assessment$eta_trajectory$start_time)]
   eta_samples <- .lator_sample_mvn(assessment$eta, assessment$eta_covariance, nsim)
   summaries <- vector("list", nrow(candidates)); trajectories <- vector("list", nrow(candidates))
   target <- .lator_target_range(endpoint)
   profile_type <- .lator_model_profile_type(model)
+  feasible_candidates <- candidates$amount <= max_single_dose &
+    candidates$amount * 24 / candidates$interval <= max_daily_dose
+  prediction_batches <- .lator_regimen_prediction_batches(
+    assessment, patient, candidates, feasible_candidates, eta_samples,
+    start_time, grid_step, residual, n_cores
+  )
 
   for (index in seq_len(nrow(candidates))) {
     candidate <- candidates[index, , drop = FALSE]
@@ -450,62 +537,9 @@ lator_regimen_optimise <- function(assessment, patient, candidates,
       )
       next
     }
-    future <- .lator_candidate_future(candidate, start_time, grid_step, model)
-    prepared_transition <- .lator_patient_dataset(
-      patient, model, assessment$analyte, cutoff = assessment$cutoff,
-      covariate_policies = assessment$covariate_policies %||% list(),
-      dynamic = identical(assessment$mode, "dynamic"),
-      state_times = state_times, include_future = future
-    )
-    transition_data <- .lator_candidate_covariates(
-      prepared_transition$data, candidate, model
-    )
-    steady_state <- .lator_candidate_steady_state(
-      candidate, start_time, grid_step, model
-    )
-    prepared_steady <- .lator_patient_dataset(
-      patient, model, assessment$analyte, cutoff = assessment$cutoff,
-      covariate_policies = assessment$covariate_policies %||% list(),
-      dynamic = identical(assessment$mode, "dynamic"),
-      state_times = state_times, include_future = steady_state
-    )
-    steady_data <- prepared_steady$data[
-      prepared_steady$data$.LATOR_ROLE %in% "future", , drop = FALSE
-    ]
-    steady_data <- .lator_candidate_covariates(
-      steady_data, candidate, model, future_only = FALSE
-    )
-    transition_replicated <- .lator_replicate_dataset(
-      transition_data, nsim, "TRANS"
-    )
-    steady_replicated <- .lator_replicate_dataset(
-      steady_data, nsim, "STEADY"
-    )
-    replicated <- .lator_bind_datasets(
-      transition_replicated, steady_replicated
-    )
-    predictions <- LibeRation::nm_simulate(
-      model, replicated, eta = rbind(eta_samples, eta_samples),
-      residual = isTRUE(residual),
-      nsim = 1L, n_cores = n_cores
-    )
     endpoint_value_column <- if (isTRUE(residual)) "DV" else "IPRED"
-    prediction_id <- as.character(predictions$ID)
-    transition_predictions <- predictions[
-      grepl("^TRANS", prediction_id) &
-        predictions$TIME >= start_time & predictions$EVID == 0L, ,
-      drop = FALSE
-    ]
-    transition_predictions$SIM <- as.integer(sub(
-      "^TRANS", "", as.character(transition_predictions$ID)
-    ))
-    steady_predictions <- predictions[
-      grepl("^STEADY", prediction_id) & predictions$EVID == 0L, ,
-      drop = FALSE
-    ]
-    steady_predictions$SIM <- as.integer(sub(
-      "^STEADY", "", as.character(steady_predictions$ID)
-    ))
+    transition_predictions <- prediction_batches[[index]]$transition
+    steady_predictions <- prediction_batches[[index]]$steady
     transition_evaluation <- lator_endpoint_evaluate(
       endpoint, transition_predictions, patient = patient,
       interval = c(start_time, start_time + candidate$horizon),

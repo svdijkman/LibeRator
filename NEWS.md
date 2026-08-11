@@ -1,5 +1,11 @@
-# LibeRator 0.4.0
+# LibeRator 0.4.1
 
+- Batches feasible candidate-regimen transition and periodic steady-state
+  simulations through shared compiled LibeRation calls, with bounded candidate
+  chunks to control peak memory, and uses the native PSD-guarded Gaussian draw
+  kernel for conditional ETA uncertainty.
+- Individual updating with a non-zero or sequential ETA prior now uses
+  LibeRation's native exact custom-prior conditional-mode optimizer.
 - Makes endpoint governance executable: `qualified` endpoints require a scoped
   issuer/reviewer/evidence attestation and an explicit research-use
   acknowledgement.
