@@ -19,6 +19,41 @@ test_that("hosted dosing GUI uses a separate workspace path per session", {
   )))
 })
 
+test_that("open hosted demonstration auto-unlocks an isolated workspace", {
+  root <- tempfile("lator-open-hosted-")
+  app <- lator_gui(
+    path = root, session_workspace = TRUE, auto_unlock_session = TRUE,
+    teaching_example = TRUE, launch.browser = NULL
+  )
+  server <- app[["serverFuncSource"]]()
+
+  shiny::testServer(server, {
+    session$flushReact()
+    expect_s3_class(state$workspace, "lator_workspace")
+    expect_true(startsWith(
+      normalizePath(state$workspace$path, winslash = "/", mustWork = FALSE),
+      paste0(normalizePath(root, winslash = "/", mustWork = FALSE), "/sessions/")
+    ))
+    expect_equal(workbench_payload()$patient$id, "TEACH-AED-001")
+  })
+})
+
+test_that("automatic unlock is restricted to isolated session workspaces", {
+  expect_error(
+    lator_gui(auto_unlock_session = TRUE, launch.browser = NULL),
+    "requires `session_workspace = TRUE`",
+    fixed = TRUE
+  )
+  expect_error(
+    lator_gui(
+      session_workspace = TRUE, auto_unlock_session = TRUE,
+      passphrase = "this must not be accepted", launch.browser = NULL
+    ),
+    "creates its own per-session key",
+    fixed = TRUE
+  )
+})
+
 test_that("pre-unlocked workspace hydrates outside a reactive consumer", {
   workspace <- lator_workspace(
     tempfile("lator-startup-"),

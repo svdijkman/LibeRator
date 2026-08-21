@@ -1,5 +1,10 @@
 # LibeRator 0.4.1
 
+- Supports explicitly configured open hosted demonstrations: every browser
+  session is automatically unlocked with its own in-memory random key and
+  receives a separately encrypted ephemeral workspace that is removed when the
+  session ends. Durable local and governed deployments still require their
+  normal passphrase or managed key.
 - Batches feasible candidate-regimen transition and periodic steady-state
   simulations through shared compiled LibeRation calls, with bounded candidate
   chunks to control peak memory, and uses the native PSD-guarded Gaussian draw

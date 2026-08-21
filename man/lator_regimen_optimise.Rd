@@ -58,7 +58,9 @@ A ranked result with summaries and per-candidate trajectories.
 \description{
 The complete dosing history is replayed for every conditional ETA draw so that
 accumulated compartment amounts are retained. Parameter uncertainty is
-evaluated in one batched C++ simulation call per candidate. These draws use
+evaluated in bounded, batched C++ simulation calls shared across candidates.
+The batch size can be tuned with `options(LibeRator.regimen_batch_candidates)`
+to balance throughput against transient memory. These draws use
 the individual's Laplace approximation conditional on the selected model and
 fitted population parameters; they do not include population-parameter or
 model-structure uncertainty.

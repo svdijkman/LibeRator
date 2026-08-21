@@ -36,6 +36,11 @@
 #' @param session_workspace Create a separate ephemeral encrypted workspace for
 #'   every browser session. This is intended for hosted research demonstrations
 #'   and prevents application users from sharing a workspace directory.
+#' @param auto_unlock_session Automatically create and unlock each ephemeral
+#'   session workspace with a random managed key held only in server memory.
+#'   This is intended for open hosted demonstrations and requires
+#'   `session_workspace = TRUE`. Local and durable workspaces retain the normal
+#'   passphrase or managed-key requirement.
 #' @param teaching_example Seed an otherwise empty workspace with the synthetic
 #'   AED teaching patient, model, individual efficacy and safety endpoints, and
 #'   their combined dual-endpoint objective. Intended for demonstrations; all
@@ -48,12 +53,21 @@ lator_gui <- function(workspace = NULL, path = NULL, passphrase = NULL, key = NU
                       models = NULL, endpoints = NULL, library_root = NULL,
                       host = "127.0.0.1",
                       port = NULL, launch.browser = TRUE, allow_remote = FALSE,
-                      session_workspace = FALSE, teaching_example = FALSE) {
+                      session_workspace = FALSE, auto_unlock_session = FALSE,
+                      teaching_example = FALSE) {
   if (!host %in% c("127.0.0.1", "localhost", "::1") && !isTRUE(allow_remote)) {
     .lator_stop("Non-loopback hosting is disabled. Set `allow_remote = TRUE` only behind governed authentication and TLS.")
   }
   if (isTRUE(session_workspace) && !is.null(workspace)) {
     .lator_stop("`workspace` cannot be supplied when `session_workspace = TRUE`.")
+  }
+  if (isTRUE(auto_unlock_session) && !isTRUE(session_workspace)) {
+    .lator_stop("`auto_unlock_session = TRUE` requires `session_workspace = TRUE`.")
+  }
+  if (isTRUE(auto_unlock_session) && (!is.null(passphrase) || !is.null(key))) {
+    .lator_stop(
+      "`auto_unlock_session = TRUE` creates its own per-session key; do not supply `passphrase` or `key`."
+    )
   }
   initial_workspace <- workspace
   if (!is.null(initial_workspace)) initial_workspace <- .lator_require_workspace(initial_workspace)
@@ -137,6 +151,11 @@ lator_gui <- function(workspace = NULL, path = NULL, passphrase = NULL, key = NU
       base <- path %||% file.path(tempdir(), "LibeRator-cloud")
       file.path(base, "sessions", gsub("[^A-Za-z0-9_-]", "-", session$token))
     } else path
+    if (isTRUE(session_workspace)) {
+      session$onSessionEnded(function() {
+        unlink(session_path, recursive = TRUE, force = TRUE)
+      })
+    }
     state <- shiny::reactiveValues(
       workspace = initial_workspace, patient_id = NULL, models = supplied_models,
       endpoints = supplied_endpoints, patient_endpoints = list(),
@@ -408,7 +427,17 @@ lator_gui <- function(workspace = NULL, path = NULL, passphrase = NULL, key = NU
     # server function, before any observer/render consumer is active. Isolate
     # startup reads from `state` so reactiveValues are never accessed without a
     # reactive context.
-    if (!is.null(initial_workspace)) {
+    if (isTRUE(auto_unlock_session)) {
+      session_workspace_key <- sodium::random(32L)
+      on.exit({
+        session_workspace_key <- raw()
+      }, add = TRUE)
+      automatic_workspace <- lator_workspace(
+        session_path, key = session_workspace_key, create = TRUE
+      )
+      state$workspace <- automatic_workspace
+      shiny::isolate(hydrate(automatic_workspace))
+    } else if (!is.null(initial_workspace)) {
       shiny::isolate(hydrate(initial_workspace))
     }
 

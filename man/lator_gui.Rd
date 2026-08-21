@@ -17,6 +17,7 @@ lator_gui(
   launch.browser = TRUE,
   allow_remote = FALSE,
   session_workspace = FALSE,
+  auto_unlock_session = FALSE,
   teaching_example = FALSE
 )
 }
@@ -43,6 +44,12 @@ qualified-model selection.}
 \item{session_workspace}{Create a separate ephemeral encrypted workspace for
 every browser session. This is intended for hosted research demonstrations
 and prevents application users from sharing a workspace directory.}
+
+\item{auto_unlock_session}{Automatically create and unlock each ephemeral
+session workspace with a random managed key held only in server memory.
+This is intended for open hosted demonstrations and requires
+`session_workspace = TRUE`. Local and durable workspaces retain the normal
+passphrase or managed-key requirement.}
 
 \item{teaching_example}{Seed an otherwise empty workspace with the synthetic
 AED teaching patient, model, individual efficacy and safety endpoints, and
